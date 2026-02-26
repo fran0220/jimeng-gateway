@@ -11,7 +11,7 @@ use axum::Router;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::CorsLayer,
-    services::ServeDir,
+    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -80,8 +80,12 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/v1", api_router)
         // Compatibility layer: proxy original jimeng API format
         .merge(routes::compat::compat_router(state.clone()))
-        // Serve React frontend static files
-        .fallback_service(ServeDir::new("static").append_index_html_on_directories(true))
+        // Serve Vite build output as SPA static assets.
+        .fallback_service(
+            ServeDir::new("web/dist")
+                .append_index_html_on_directories(true)
+                .not_found_service(ServeFile::new("web/dist/index.html")),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 

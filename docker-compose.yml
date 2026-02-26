@@ -1,6 +1,8 @@
 services:
   jimeng-api:
-    image: jimeng-free-api-all:patched
+    build:
+      context: ../jimeng-free-api-fork
+    image: fran0220/jimeng-free-api-all:fork
     container_name: jimeng-free-api-all
     restart: unless-stopped
     init: true

@@ -106,7 +106,12 @@ impl TaskQueue {
     }
 
     /// Enqueue a new video generation task.
-    pub async fn enqueue(&self, req: CreateTaskRequest, request_body: Option<Vec<u8>>) -> Result<TaskRecord> {
+    pub async fn enqueue(
+        &self,
+        req: CreateTaskRequest,
+        request_body: Option<Vec<u8>>,
+        request_content_type: Option<String>,
+    ) -> Result<TaskRecord> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -115,8 +120,8 @@ impl TaskQueue {
         let ratio = req.ratio.unwrap_or_else(|| "9:16".to_string());
 
         sqlx::query(
-            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, request_body, created_at, updated_at) \
-             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, request_body, request_content_type, created_at, updated_at) \
+             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&model)
@@ -124,6 +129,7 @@ impl TaskQueue {
         .bind(duration)
         .bind(&ratio)
         .bind(&request_body)
+        .bind(&request_content_type)
         .bind(&now)
         .bind(&now)
         .execute(&self.db.pool)
@@ -214,6 +220,34 @@ impl TaskQueue {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Retry a task by cloning its original payload into a new queued record.
+    pub async fn retry_task(&self, id: &str) -> Result<Option<TaskRecord>> {
+        let src = sqlx::query_as::<_, RetryTaskRow>(
+            "SELECT model, prompt, duration, ratio, request_body, request_content_type \
+             FROM tasks WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db.pool)
+        .await?;
+
+        let Some(src) = src else {
+            return Ok(None);
+        };
+
+        let req = CreateTaskRequest {
+            prompt: src.prompt,
+            duration: Some(src.duration),
+            ratio: Some(src.ratio),
+            model: Some(src.model),
+            files: None,
+        };
+
+        let task = self
+            .enqueue(req, src.request_body, src.request_content_type)
+            .await?;
+        Ok(Some(task))
     }
 
     /// Get stats summary.
@@ -319,4 +353,14 @@ struct StatsRow {
     succeeded: i32,
     failed: i32,
     cancelled: i32,
+}
+
+#[derive(sqlx::FromRow)]
+struct RetryTaskRow {
+    model: String,
+    prompt: String,
+    duration: i32,
+    ratio: String,
+    request_body: Option<Vec<u8>>,
+    request_content_type: Option<String>,
 }

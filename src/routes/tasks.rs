@@ -50,7 +50,7 @@ async fn create_task(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let task = state
         .queue
-        .enqueue(req, None)
+        .enqueue(req, None, None)
         .await
         .map_err(|e| {
             (
@@ -84,6 +84,26 @@ async fn cancel_task(
     }
 }
 
+async fn retry_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    let task = state
+        .queue
+        .retry_task(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "task": task,
+            "retry_of": id,
+        })),
+    ))
+}
+
 async fn get_stats(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -101,6 +121,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}", get(get_task))
         .route("/tasks/{id}/cancel", post(cancel_task))
+        .route("/tasks/{id}/retry", post(retry_task))
         .route("/stats", get(get_stats))
         .with_state(state)
 }

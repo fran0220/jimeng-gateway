@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/jimeng-gateway ./
-COPY --from=frontend /app/web/dist ./static/
+COPY --from=frontend /app/web/dist ./web/dist/
 
 RUN mkdir -p /app/data
 

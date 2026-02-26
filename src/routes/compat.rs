@@ -55,7 +55,7 @@ async fn compat_video_generations(
 
     let task = state
         .queue
-        .enqueue(req, Some(body.to_vec()))
+        .enqueue(req, Some(body.to_vec()), Some(content_type.to_string()))
         .await
         .map_err(|e| {
             (

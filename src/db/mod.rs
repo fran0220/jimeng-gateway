@@ -55,6 +55,7 @@ impl Database {
                 error_message TEXT,
                 error_kind TEXT,
                 request_body BLOB,
+                request_content_type TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 started_at TEXT,
@@ -67,6 +68,15 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+
+        if let Err(err) = sqlx::query("ALTER TABLE tasks ADD COLUMN request_content_type TEXT")
+            .execute(&self.pool)
+            .await
+        {
+            if !err.to_string().contains("duplicate column name") {
+                return Err(err.into());
+            }
+        }
 
         tracing::info!("Database migrated successfully");
         Ok(())
