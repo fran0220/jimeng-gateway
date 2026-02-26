@@ -1,0 +1,74 @@
+use anyhow::Result;
+use sqlx::SqlitePool;
+
+#[derive(Debug, Clone)]
+pub struct Database {
+    pub pool: SqlitePool,
+}
+
+impl Database {
+    pub async fn connect(url: &str) -> Result<Self> {
+        // Ensure data directory exists
+        if let Some(path) = url.strip_prefix("sqlite://") {
+            let path = path.split('?').next().unwrap_or(path);
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        let pool = SqlitePool::connect(url).await?;
+        Ok(Self { pool })
+    }
+
+    pub async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                healthy INTEGER NOT NULL DEFAULT 1,
+                active_tasks INTEGER NOT NULL DEFAULT 0,
+                total_tasks Integer NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                last_used_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                session_pool_id TEXT,
+                status TEXT NOT NULL DEFAULT 'queued',
+                model TEXT NOT NULL DEFAULT 'jimeng-video-seedance-2.0',
+                prompt TEXT NOT NULL,
+                duration INTEGER NOT NULL DEFAULT 4,
+                ratio TEXT NOT NULL DEFAULT '9:16',
+                history_record_id TEXT,
+                queue_position INTEGER,
+                queue_total INTEGER,
+                queue_eta TEXT,
+                video_url TEXT,
+                error_message TEXT,
+                error_kind TEXT,
+                request_body BLOB,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                started_at TEXT,
+                finished_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        tracing::info!("Database migrated successfully");
+        Ok(())
+    }
+}

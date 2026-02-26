@@ -1,0 +1,7 @@
+/target
+/data
+*.db
+*.db-journal
+.env
+web/node_modules
+web/dist
