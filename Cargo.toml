@@ -41,6 +41,18 @@ dotenvy = "0.15"
 # Async
 futures = "0.3"
 
+# Auth / SSO
+axum-login = "0.18"
+tower-sessions = "0.14"
+tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
+openidconnect = "4"
+oauth2 = "5"
+sha2 = "0.10"
+hex = "0.4"
+dashmap = "6"
+rand = "0.9"
+urlencoding = "2"
+
 [profile.release]
 opt-level = 3
 lto = true

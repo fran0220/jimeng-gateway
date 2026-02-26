@@ -1,0 +1,16 @@
+logs
+dist
+doc
+node_modules
+.vscode
+.git
+.gitignore
+README.md
+*.tar.gz
+tmp
+*.png
+*.jpeg
+*.jpg
+*.mp4
+.ipynb_checkpoints
+curl*.txt

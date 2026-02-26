@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -9,6 +9,8 @@ use axum::{
 };
 
 use crate::AppState;
+use crate::auth::middleware::{Caller, require_scope};
+use crate::auth::usage as usage_tracker;
 use crate::queue::CreateTaskRequest;
 
 /// Compatibility layer: accepts the same API format as jimeng-free-api-all
@@ -19,9 +21,36 @@ use crate::queue::CreateTaskRequest;
 /// `GET /ping` → health check.
 async fn compat_video_generations(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    // Scope check
+    if let Err(resp) = require_scope(&caller, "video:create") {
+        let (parts, body) = resp.into_parts();
+        let bytes = axum::body::to_bytes(body, 4096).await.unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        return Err((parts.status, Json(json)));
+    }
+
+    // Daily quota check for API key callers
+    if let Caller::ApiKey { ref key_id, daily_quota, .. } = caller {
+        if daily_quota > 0 {
+            let today_tasks = usage_tracker::today_task_count(&state.db.pool, key_id)
+                .await
+                .unwrap_or(0);
+            if today_tasks >= daily_quota {
+                return Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": "Daily quota exceeded",
+                        "daily_quota": daily_quota,
+                        "used": today_tasks,
+                    })),
+                ));
+            }
+        }
+    }
     // Try to parse the multipart body to extract prompt/model/duration/ratio.
     // For now, store the raw body and forward it to upstream in the worker.
     let content_type = headers
@@ -63,6 +92,11 @@ async fn compat_video_generations(
                 Json(serde_json::json!({ "error": e.to_string() })),
             )
         })?;
+
+    // Record task creation for daily quota tracking
+    if let Some(key_id) = caller.key_id() {
+        usage_tracker::record_task(&state.db.pool, key_id).await;
+    }
 
     // Return in a format compatible with the jimeng API response structure,
     // but with additional task tracking info.

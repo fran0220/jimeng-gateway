@@ -1,0 +1,33 @@
+dist/
+node_modules/
+logs/
+.vercel
+.ipynb_checkpoints/文生视频首位帧-checkpoint.txt
+文生视频首位帧.txt
+yarn.lock
+jimeng-free-api-all.tar
+yarn.lock
+.claude/settings.local.json
+.ipynb_checkpoints/Dockerfile-checkpoint
+.ipynb_checkpoints/README-checkpoint.md
+.ipynb_checkpoints/package-checkpoint.json
+.ipynb_checkpoints/tsconfig-checkpoint.json
+src/api/controllers/.ipynb_checkpoints/images-checkpoint.ts
+20260207请求.txt
+curl(node.js)_Seedance 2.0.txt
+.ipynb_checkpoints/20260207请求-checkpoint.txt
+11.jpg
+22.png
+curl(node.js)download.txt
+.ipynb_checkpoints/11-checkpoint.jpg
+.ipynb_checkpoints/22-checkpoint.png
+.ipynb_checkpoints/curl(node.js)_Seedance 2.0-checkpoint.txt
+README.md
+curl(node.js)_jimeng-5.0preview-txt
+curl(node.js)_jimeng-4.6.txt
+.ipynb_checkpoints/CLAUDE-checkpoint.md
+curl(nodejs)-seedance2.0fast.txt
+.ipynb_checkpoints/test-seedance-media-checkpoint.py
+.ipynb_checkpoints/test-seedance-media-checkpoint.sh
+curl(nodejs)-seedance2.0fast+声音.txt
+curl(nodejs)-seedance2.0fast+声音2.txt

@@ -1,7 +1,19 @@
 services:
+  rauthy:
+    image: ghcr.io/sebadob/rauthy:latest
+    container_name: rauthy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - rauthy-data:/app/data
+      - ./rauthy/rauthy.cfg:/app/rauthy.cfg:ro
+    environment:
+      - TZ=Asia/Shanghai
+
   jimeng-api:
     build:
-      context: ../jimeng-free-api-fork
+      context: ./jimeng-free-api-fork
     image: fran0220/jimeng-free-api-all:fork
     container_name: jimeng-free-api-all
     restart: unless-stopped
@@ -42,4 +54,5 @@ services:
       - jimeng-api
 
 volumes:
+  rauthy-data:
   gateway-data:

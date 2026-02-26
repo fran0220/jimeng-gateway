@@ -17,6 +17,19 @@ pub struct Config {
     pub poll_interval_secs: u64,
     /// Max poll duration (no timeout by default — queue can take hours)
     pub max_poll_duration_secs: u64,
+    /// Enable authentication (default: false for backward compat)
+    pub auth_enabled: bool,
+    /// Static admin token fallback (for scripts/CI)
+    pub admin_token: Option<String>,
+    /// OIDC issuer URL (e.g., http://localhost:8080/auth/v1)
+    /// Supports any OIDC-compliant provider: Rauthy, Kanidm, Google, etc.
+    pub oidc_issuer_url: Option<String>,
+    /// OAuth2 client ID
+    pub oidc_client_id: Option<String>,
+    /// OAuth2 client secret
+    pub oidc_client_secret: Option<String>,
+    /// OAuth2 redirect URL (callback endpoint on this gateway)
+    pub oidc_redirect_url: Option<String>,
 }
 
 impl Config {
@@ -44,6 +57,15 @@ impl Config {
                 .unwrap_or_else(|_| "14400".into()) // 4 hours default
                 .parse()
                 .unwrap_or(14400),
+            auth_enabled: env::var("AUTH_ENABLED")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            admin_token: env::var("ADMIN_TOKEN").ok().filter(|s| !s.is_empty()),
+            oidc_issuer_url: env::var("OIDC_ISSUER_URL").ok().filter(|s| !s.is_empty()),
+            oidc_client_id: env::var("OIDC_CLIENT_ID").ok().filter(|s| !s.is_empty()),
+            oidc_client_secret: env::var("OIDC_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+            oidc_redirect_url: env::var("OIDC_REDIRECT_URL").ok().filter(|s| !s.is_empty()),
         })
     }
 }
