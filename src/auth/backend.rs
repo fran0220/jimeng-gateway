@@ -1,5 +1,6 @@
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use sqlx::SqlitePool;
 
 /// Admin user stored in session
@@ -23,34 +24,57 @@ impl AuthUser for AdminUser {
     }
 }
 
-/// Credentials placeholder (OIDC exchange happens in route handler, not authenticate())
+/// Password-based credentials
 #[derive(Debug, Clone)]
-pub struct OidcCredentials;
+pub struct PasswordCredentials {
+    pub username: String,
+    pub password: String,
+}
 
-/// Auth backend that validates OIDC codes and manages admin users
+/// Auth backend that validates passwords against admin_users table
 #[derive(Debug, Clone)]
-pub struct OidcBackend {
+pub struct PasswordBackend {
     pub db: SqlitePool,
 }
 
-impl OidcBackend {
+impl PasswordBackend {
     pub fn new(db: SqlitePool) -> Self {
         Self { db }
     }
 }
 
-impl AuthnBackend for OidcBackend {
+impl AuthnBackend for PasswordBackend {
     type User = AdminUser;
-    type Credentials = OidcCredentials;
-    type Error = std::convert::Infallible;
+    type Credentials = PasswordCredentials;
+    type Error = sqlx::Error;
 
     async fn authenticate(
         &self,
-        _creds: Self::Credentials,
+        creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        // OIDC token exchange is handled in the /auth/callback route handler.
-        // The callback calls auth_session.login() directly after exchanging the code.
-        Ok(None)
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT id, name, email, auth_hash FROM admin_users WHERE id = ?",
+        )
+        .bind(&creds.username)
+        .fetch_optional(&self.db)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let candidate = sha2::Sha256::digest(creds.password.as_bytes()).to_vec();
+
+        if row.auth_hash == candidate {
+            Ok(Some(AdminUser {
+                id: row.id,
+                name: row.name,
+                email: row.email,
+                auth_hash: row.auth_hash,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
@@ -59,8 +83,7 @@ impl AuthnBackend for OidcBackend {
         )
         .bind(user_id)
         .fetch_optional(&self.db)
-        .await
-        .unwrap_or(None);
+        .await?;
 
         Ok(row.map(|r| AdminUser {
             id: r.id,
@@ -79,4 +102,4 @@ struct UserRow {
     auth_hash: Vec<u8>,
 }
 
-pub type AuthSession = axum_login::AuthSession<OidcBackend>;
+pub type AuthSession = axum_login::AuthSession<PasswordBackend>;

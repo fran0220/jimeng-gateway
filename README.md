@@ -48,6 +48,8 @@ docker compose up -d
 
 ## API
 
+第三方接入 Seedance 2.0（精简版）请参考：`docs/seedance-2.0-integration.md`
+
 ### Tasks (async video generation)
 ```
 POST   /api/v1/tasks              # Create task → immediate {task_id}

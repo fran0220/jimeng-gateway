@@ -39,33 +39,35 @@ impl SessionPool {
         Ok(())
     }
 
-    /// Pick the best available session using LRU + health filtering.
+    /// Pick the best available session using atomic DB-level CAS.
     pub async fn pick_session(&self) -> Option<SessionInfo> {
-        let sessions = self.sessions.read().await;
-        sessions
-            .iter()
-            .filter(|s| s.enabled && s.healthy)
-            .filter(|s| s.active_tasks < 2) // max 2 concurrent per session
-            .min_by_key(|s| s.last_used_at.clone())
-            .cloned()
-    }
-
-    /// Mark a session as active (increment active_tasks).
-    pub async fn mark_active(&self, session_id: &str) -> Result<()> {
-        sqlx::query(
+        // Atomic pick + reserve: single SQL statement prevents race conditions
+        let row = sqlx::query_as::<_, SessionInfo>(
             "UPDATE sessions SET active_tasks = active_tasks + 1, \
              last_used_at = datetime('now'), updated_at = datetime('now') \
-             WHERE id = ?",
+             WHERE id = (SELECT id FROM sessions WHERE enabled=1 AND healthy=1 AND active_tasks < 2 \
+                         ORDER BY last_used_at LIMIT 1) \
+             RETURNING id, label, session_id, enabled, healthy, active_tasks, total_tasks, \
+                       success_count, fail_count, last_used_at, last_error, created_at, updated_at",
         )
-        .bind(session_id)
-        .execute(&self.db.pool)
-        .await?;
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()?;
 
-        let mut sessions = self.sessions.write().await;
-        if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
-            s.active_tasks += 1;
-            s.last_used_at = Some(chrono::Utc::now().to_rfc3339());
+        if let Some(ref session) = row {
+            // Sync in-memory cache
+            let mut sessions = self.sessions.write().await;
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == session.id) {
+                s.active_tasks = session.active_tasks;
+                s.last_used_at = session.last_used_at.clone();
+            }
         }
+
+        row
+    }
+
+    /// No-op: pick_session() atomically increments active_tasks.
+    pub async fn mark_active(&self, _session_id: &str) -> Result<()> {
         Ok(())
     }
 
@@ -95,12 +97,6 @@ impl SessionPool {
                 s.success_count += 1;
             } else {
                 s.fail_count += 1;
-                // Auto-disable after 3 consecutive auth failures
-                if let Some(ref err) = error.map(String::from) {
-                    if err.contains("authorization") || err.contains("login") {
-                        s.fail_count += 1;
-                    }
-                }
             }
         }
         Ok(())
@@ -146,8 +142,8 @@ impl SessionPool {
             fail_count: 0,
             last_used_at: None,
             last_error: None,
-            created_at: chrono::Utc::now().to_rfc3339(),
-            updated_at: chrono::Utc::now().to_rfc3339(),
+            created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            updated_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         };
 
         self.sessions.write().await.push(session.clone());

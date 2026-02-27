@@ -36,6 +36,7 @@ pub struct ApiKeyRecord {
     pub id: String,
     pub name: String,
     pub key_prefix: String,
+    pub raw_key: String,
     pub enabled: bool,
     pub expires_at: Option<String>,
     pub rate_limit: i32,
@@ -52,6 +53,7 @@ struct ApiKeyRow {
     id: String,
     name: String,
     key_prefix: String,
+    raw_key: String,
     enabled: bool,
     expires_at: Option<String>,
     rate_limit: i32,
@@ -68,6 +70,7 @@ impl From<ApiKeyRow> for ApiKeyRecord {
             id: row.id,
             name: row.name,
             key_prefix: row.key_prefix,
+            raw_key: row.raw_key,
             enabled: row.enabled,
             expires_at: row.expires_at,
             rate_limit: row.rate_limit,
@@ -83,7 +86,7 @@ impl From<ApiKeyRow> for ApiKeyRecord {
 /// Look up an API key by its SHA256 hash. Returns None if not found.
 pub async fn lookup_by_hash(db: &SqlitePool, key_hash: &str) -> Result<Option<ApiKeyRecord>> {
     let row = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, name, key_prefix, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
+        "SELECT id, name, key_prefix, raw_key, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
          FROM api_keys WHERE key_hash = ?",
     )
     .bind(key_hash)
@@ -119,13 +122,14 @@ pub async fn create(
     let metadata_json = serde_json::to_string(metadata)?;
 
     sqlx::query(
-        "INSERT INTO api_keys (id, name, key_hash, key_prefix, enabled, expires_at, rate_limit, daily_quota, scopes, metadata) \
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+        "INSERT INTO api_keys (id, name, key_hash, key_prefix, raw_key, enabled, expires_at, rate_limit, daily_quota, scopes, metadata) \
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(name)
     .bind(&hash)
     .bind(&prefix)
+    .bind(&raw_key)
     .bind(expires_at)
     .bind(rate_limit)
     .bind(daily_quota)
@@ -138,6 +142,7 @@ pub async fn create(
         id,
         name: name.to_string(),
         key_prefix: prefix,
+        raw_key: raw_key.clone(),
         enabled: true,
         expires_at: expires_at.map(String::from),
         rate_limit,
@@ -154,7 +159,7 @@ pub async fn create(
 /// List all API keys.
 pub async fn list_all(db: &SqlitePool) -> Result<Vec<ApiKeyRecord>> {
     let rows = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, name, key_prefix, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
+        "SELECT id, name, key_prefix, raw_key, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
          FROM api_keys ORDER BY created_at DESC",
     )
     .fetch_all(db)
@@ -166,7 +171,7 @@ pub async fn list_all(db: &SqlitePool) -> Result<Vec<ApiKeyRecord>> {
 /// Get a single API key by ID.
 pub async fn get_by_id(db: &SqlitePool, id: &str) -> Result<Option<ApiKeyRecord>> {
     let row = sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, name, key_prefix, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
+        "SELECT id, name, key_prefix, raw_key, enabled, expires_at, rate_limit, daily_quota, scopes, metadata, created_at, last_used_at \
          FROM api_keys WHERE id = ?",
     )
     .bind(id)
@@ -251,10 +256,11 @@ pub async fn regenerate(db: &SqlitePool, id: &str) -> Result<Option<String>> {
     let prefix = key_prefix(&raw_key);
 
     let result = sqlx::query(
-        "UPDATE api_keys SET key_hash = ?, key_prefix = ?, last_used_at = NULL WHERE id = ?",
+        "UPDATE api_keys SET key_hash = ?, key_prefix = ?, raw_key = ?, last_used_at = NULL WHERE id = ?",
     )
     .bind(&hash)
     .bind(&prefix)
+    .bind(&raw_key)
     .bind(id)
     .execute(db)
     .await?;

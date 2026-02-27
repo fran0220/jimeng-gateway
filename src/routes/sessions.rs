@@ -93,7 +93,7 @@ async fn toggle_session(
     }
 }
 
-/// Test if a session is still valid by calling upstream /ping with auth.
+/// Test if a session is still valid by calling jimeng API directly.
 async fn test_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -105,9 +105,14 @@ async fn test_session(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let client = reqwest::Client::new();
+    let headers = crate::jimeng::auth::build_headers(&session.session_id, "/mweb/v1/get_history_by_ids");
+    let params = crate::jimeng::auth::standard_query_params();
+
     let resp = client
-        .get(format!("{}/ping", state.config.jimeng_upstream))
-        .header("Authorization", format!("Bearer {}", session.session_id))
+        .post("https://jimeng.jianying.com/mweb/v1/get_history_by_ids")
+        .headers(headers)
+        .query(&params)
+        .json(&serde_json::json!({ "history_ids": [] }))
         .send()
         .await;
 
@@ -120,7 +125,7 @@ async fn test_session(
             let text = r.text().await.unwrap_or_default();
             Ok(Json(serde_json::json!({
                 "ok": false,
-                "message": format!("Upstream returned {status}"),
+                "message": format!("Jimeng API returned {status}"),
                 "detail": text,
             })))
         }

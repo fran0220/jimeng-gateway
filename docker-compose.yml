@@ -7,7 +7,7 @@ services:
       - "8080:8080"
     volumes:
       - rauthy-data:/app/data
-      - ./rauthy/rauthy.cfg:/app/rauthy.cfg:ro
+      - ./rauthy/config.toml:/app/config.toml:ro
     environment:
       - TZ=Asia/Shanghai
 
@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "127.0.0.1:8000:8000"  # Only local access
+      - "127.0.0.1:8000:8000"
     environment:
       - TZ=Asia/Shanghai
     shm_size: "1gb"
@@ -33,26 +33,5 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  gateway:
-    build: .
-    container_name: jimeng-gateway
-    restart: unless-stopped
-    ports:
-      - "5100:5100"
-    environment:
-      - TZ=Asia/Shanghai
-      - JIMENG_UPSTREAM=http://jimeng-api:8000
-      - JIMENG_CONTAINER=jimeng-free-api-all
-      - DATABASE_URL=sqlite:///app/data/gateway.db?mode=rwc
-      - CONCURRENCY=2
-      - MAX_POLL_DURATION_SECS=14400
-      - RUST_LOG=jimeng_gateway=info
-    volumes:
-      - gateway-data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      - jimeng-api
-
 volumes:
   rauthy-data:
-  gateway-data:

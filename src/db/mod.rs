@@ -17,6 +17,9 @@ impl Database {
         }
 
         let pool = SqlitePool::connect(url).await?;
+        // Enable WAL mode and set busy timeout for concurrent access
+        sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+        sqlx::query("PRAGMA busy_timeout=5000").execute(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -85,6 +88,7 @@ impl Database {
                 name TEXT NOT NULL,
                 key_hash TEXT NOT NULL UNIQUE,
                 key_prefix TEXT NOT NULL,
+                raw_key TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 expires_at TEXT,
                 rate_limit INTEGER NOT NULL DEFAULT 60,
@@ -114,6 +118,7 @@ impl Database {
         let alter_columns = [
             "ALTER TABLE tasks ADD COLUMN request_content_type TEXT",
             "ALTER TABLE tasks ADD COLUMN api_key_id TEXT",
+            "ALTER TABLE api_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''",
         ];
         for sql in &alter_columns {
             if let Err(err) = sqlx::query(sql).execute(&self.pool).await {
@@ -124,6 +129,26 @@ impl Database {
         }
 
         tracing::info!("Database migrated successfully");
+        Ok(())
+    }
+
+    pub async fn recover_on_startup(&self) -> Result<()> {
+        // Reset all session active_tasks counters
+        let reset = sqlx::query("UPDATE sessions SET active_tasks = 0")
+            .execute(&self.pool)
+            .await?;
+        tracing::info!(rows = reset.rows_affected(), "Reset session active_tasks on startup");
+
+        // Requeue stuck tasks (in transient states for >10 minutes)
+        let requeued = sqlx::query(
+            "UPDATE tasks SET status = 'queued', updated_at = datetime('now') \
+             WHERE status IN ('submitting', 'polling', 'downloading') \
+             AND updated_at < datetime('now', '-10 minutes')"
+        )
+        .execute(&self.pool)
+        .await?;
+        tracing::info!(rows = requeued.rows_affected(), "Requeued stuck tasks on startup");
+
         Ok(())
     }
 }

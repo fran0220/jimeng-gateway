@@ -1,0 +1,28 @@
+[Unit]
+Description=Jimeng Video Generation Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/jimeng-gateway
+ExecStart=/opt/jimeng-gateway/target/release/jimeng-gateway
+Restart=on-failure
+RestartSec=5
+
+# Environment
+EnvironmentFile=/opt/jimeng-gateway/.env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jimeng-gateway
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/jimeng-gateway/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

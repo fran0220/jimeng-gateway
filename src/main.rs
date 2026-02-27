@@ -1,7 +1,7 @@
 mod auth;
 mod config;
 mod db;
-mod docker;
+mod jimeng;
 mod pool;
 mod queue;
 mod routes;
@@ -20,12 +20,12 @@ use tower_sessions::{ExpiredDeletion, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::auth::backend::OidcBackend;
+use crate::auth::backend::PasswordBackend;
 use crate::auth::middleware::api_key_auth;
 use crate::auth::rate_limiter::RateLimiter;
 use crate::config::Config;
 use crate::db::Database;
-use crate::docker::DockerService;
+use crate::jimeng::browser::BrowserService;
 use crate::pool::SessionPool;
 use crate::queue::TaskQueue;
 
@@ -35,7 +35,7 @@ pub struct AppState {
     pub db: Database,
     pub pool: SessionPool,
     pub queue: TaskQueue,
-    pub docker: DockerService,
+    pub browser: BrowserService,
     pub rate_limiter: RateLimiter,
 }
 
@@ -51,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     tracing::info!(
         port = config.port,
-        upstream = %config.jimeng_upstream,
         auth_enabled = config.auth_enabled,
         "Starting jimeng-gateway"
     );
@@ -59,15 +58,15 @@ async fn main() -> anyhow::Result<()> {
     // Initialize subsystems
     let db = Database::connect(&config.database_url).await?;
     db.migrate().await?;
+    db.recover_on_startup().await?;
 
     let pool = SessionPool::new(db.clone());
     pool.load_sessions().await?;
 
-    let docker = DockerService::new(&config.jimeng_container_name)?;
+    let browser = BrowserService::new(config.chromium_path.clone());
     let queue = TaskQueue::new(
         db.clone(),
         pool.clone(),
-        config.jimeng_upstream.clone(),
         config.concurrency,
     );
 
@@ -78,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         db: db.clone(),
         pool,
         queue,
-        docker,
+        browser,
         rate_limiter,
     });
 
@@ -93,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         .with_secure(false); // HTTP in dev; set true in production with HTTPS
 
     // Auth backend + layer
-    let auth_backend = OidcBackend::new(db.pool.clone());
+    let auth_backend = PasswordBackend::new(db.pool.clone());
     let auth_layer = AuthManagerLayerBuilder::new(auth_backend, session_layer).build();
 
     // Spawn session cleanup task
@@ -109,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
     // Admin API routes — protected when AUTH_ENABLED=true
     let admin_router = if config.auth_enabled {
         routes::admin_api_router(state.clone())
-            .route_layer(axum_login::login_required!(OidcBackend))
+            .route_layer(axum_login::login_required!(PasswordBackend))
     } else {
         routes::admin_api_router(state.clone())
     };

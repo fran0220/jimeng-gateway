@@ -1,0 +1,44 @@
+[dev]
+dev_mode = false
+
+[access]
+cookie_mode = 'danger-insecure'
+
+[server]
+pub_url = '185.200.65.233:8080'
+bind_addr = '0.0.0.0:8080'
+proxy_mode = false
+
+[database]
+hiqlite = true
+
+[cluster]
+node_id = 1
+nodes = ["1 localhost:8100 localhost:8200"]
+secret_raft = "jimengGatewayRaftSecret2026x"
+secret_api = "jimengGatewayApiSecret2026xx"
+
+[bootstrap]
+admin_email = 'admin@jimeng-gateway.local'
+password_plain = 'Admin@2026!'
+
+[encryption]
+keys = [
+  'jmgw01/1M/5JfbvyPZMTEO6qgdnM7atH3R+bhcpPoc1saNAPjE=',
+]
+key_active = 'jmgw01'
+
+[hashing]
+argon2_m_cost = 32768
+argon2_t_cost = 3
+argon2_p_cost = 2
+max_hash_threads = 2
+
+[webauthn]
+rp_id = 'localhost'
+rp_origin = 'http://185.200.65.233:8080'
+rp_name = 'Jimeng Gateway'
+
+[http_client]
+danger_unencrypted = true
+danger_insecure = true

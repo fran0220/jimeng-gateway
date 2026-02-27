@@ -5,10 +5,8 @@ use anyhow::{Context, Result};
 #[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
-    /// Upstream jimeng-free-api-all URL (e.g. http://jimeng-api:8000)
-    pub jimeng_upstream: String,
-    /// Docker container name for log streaming
-    pub jimeng_container_name: String,
+    /// Path to chromium-browser binary (auto-detected if not set)
+    pub chromium_path: Option<String>,
     /// SQLite database URL
     pub database_url: String,
     /// Max concurrent video generation tasks
@@ -39,10 +37,7 @@ impl Config {
                 .unwrap_or_else(|_| "5100".into())
                 .parse()
                 .context("PORT must be a valid u16")?,
-            jimeng_upstream: env::var("JIMENG_UPSTREAM")
-                .unwrap_or_else(|_| "http://127.0.0.1:8000".into()),
-            jimeng_container_name: env::var("JIMENG_CONTAINER")
-                .unwrap_or_else(|_| "jimeng-free-api-all".into()),
+            chromium_path: env::var("CHROMIUM_PATH").ok().filter(|s| !s.is_empty()),
             database_url: env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite://data/gateway.db?mode=rwc".into()),
             concurrency: env::var("CONCURRENCY")

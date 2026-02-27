@@ -13,6 +13,13 @@ use crate::AppState;
 use crate::auth::api_key;
 use crate::auth::middleware::{Caller, require_scope};
 
+fn require_admin_if_api_key(caller: Option<Extension<Caller>>) -> Result<(), Response> {
+    if let Some(Extension(caller)) = caller {
+        require_scope(&caller, "admin")?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct CreateKeyRequest {
     name: String,
@@ -25,10 +32,10 @@ struct CreateKeyRequest {
 
 async fn create_key(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let scopes = req.scopes.unwrap_or_else(|| {
         vec![
@@ -77,9 +84,9 @@ async fn create_key(
 
 async fn list_keys(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let keys = api_key::list_all(&state.db.pool).await.map_err(|e| {
         (
@@ -94,10 +101,10 @@ async fn list_keys(
 
 async fn get_key(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let key = api_key::get_by_id(&state.db.pool, &id)
         .await
@@ -132,11 +139,11 @@ struct UpdateKeyRequest {
 
 async fn update_key(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
     Path(id): Path<String>,
     Json(req): Json<UpdateKeyRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let patch = api_key::UpdateApiKey {
         name: req.name,
@@ -171,10 +178,10 @@ async fn update_key(
 
 async fn delete_key(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let deleted = api_key::delete(&state.db.pool, &id)
         .await
@@ -200,10 +207,10 @@ async fn delete_key(
 
 async fn regenerate_key(
     State(state): State<Arc<AppState>>,
-    Extension(caller): Extension<Caller>,
+    caller: Option<Extension<Caller>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_scope(&caller, "admin")?;
+    require_admin_if_api_key(caller)?;
 
     let raw_key = api_key::regenerate(&state.db.pool, &id)
         .await

@@ -87,18 +87,16 @@ pub struct FileInput {
 pub struct TaskQueue {
     db: Database,
     pool: SessionPool,
-    upstream: String,
     concurrency: usize,
     notify: Arc<Notify>,
     running: Arc<RwLock<usize>>,
 }
 
 impl TaskQueue {
-    pub fn new(db: Database, pool: SessionPool, upstream: String, concurrency: usize) -> Self {
+    pub fn new(db: Database, pool: SessionPool, concurrency: usize) -> Self {
         Self {
             db,
             pool,
-            upstream,
             concurrency,
             notify: Arc::new(Notify::new()),
             running: Arc::new(RwLock::new(0)),
@@ -113,7 +111,7 @@ impl TaskQueue {
         request_content_type: Option<String>,
     ) -> Result<TaskRecord> {
         let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let model = req.model.unwrap_or_else(|| "jimeng-video-seedance-2.0".to_string());
         let duration = req.duration.unwrap_or(4);
@@ -254,12 +252,12 @@ impl TaskQueue {
     pub async fn stats(&self) -> Result<serde_json::Value> {
         let row = sqlx::query_as::<_, StatsRow>(
             "SELECT \
-               COUNT(*) as total, \
-               SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued, \
-               SUM(CASE WHEN status IN ('submitting', 'polling', 'downloading') THEN 1 ELSE 0 END) as running, \
-               SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as succeeded, \
-               SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed, \
-               SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled \
+               COALESCE(COUNT(*), 0) as total, \
+               COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) as queued, \
+               COALESCE(SUM(CASE WHEN status IN ('submitting', 'polling', 'downloading') THEN 1 ELSE 0 END), 0) as running, \
+               COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) as succeeded, \
+               COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
+               COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled \
              FROM tasks",
         )
         .fetch_one(&self.db.pool)

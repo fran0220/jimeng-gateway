@@ -166,18 +166,22 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> (String, Option<
     (prompt, model, duration, ratio)
 }
 
-async fn compat_models(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{}/v1/models", state.config.jimeng_upstream))
-        .send()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    let body: serde_json::Value = resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
-    Ok(Json(body))
+async fn compat_models() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "object": "list",
+        "data": [
+            { "id": "jimeng-video-seedance-2.0", "object": "model" },
+            { "id": "jimeng-video-seedance-2.0-fast", "object": "model" },
+            { "id": "jimeng-video-3.5-pro", "object": "model" },
+            { "id": "jimeng-video-3.0-pro", "object": "model" },
+            { "id": "jimeng-video-3.0", "object": "model" },
+            { "id": "jimeng-video-2.0-pro", "object": "model" },
+            { "id": "jimeng-video-2.0", "object": "model" },
+            { "id": "seedance-2.0", "object": "model" },
+            { "id": "seedance-2.0-pro", "object": "model" },
+            { "id": "seedance-2.0-fast", "object": "model" },
+        ]
+    }))
 }
 
 async fn compat_ping() -> &'static str {
