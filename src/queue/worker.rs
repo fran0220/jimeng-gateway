@@ -13,6 +13,9 @@ use crate::jimeng::models::{MaterialType, UploadedMaterial};
 pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
     let client = Client::builder()
         .timeout(Duration::from_secs(120))
+        .gzip(true)
+        .brotli(true)
+        .deflate(true)
         .build()
         .expect("Failed to build HTTP client");
 
