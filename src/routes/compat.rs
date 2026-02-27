@@ -192,6 +192,10 @@ pub fn compat_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/videos/generations", post(compat_video_generations))
         .route("/v1/models", get(compat_models))
-        .route("/ping", get(compat_ping))
         .with_state(state)
+}
+
+/// Unauthenticated health check route
+pub fn ping_router() -> Router {
+    Router::new().route("/ping", get(compat_ping))
 }

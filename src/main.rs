@@ -120,7 +120,10 @@ async fn main() -> anyhow::Result<()> {
     let compat_router = routes::compat::compat_router(state.clone())
         .route_layer(middleware::from_fn_with_state(state.clone(), api_key_auth));
 
+    let ping_router = routes::compat::ping_router();
+
     let app = Router::new()
+        .merge(ping_router)
         .merge(auth_router)
         .nest("/api/v1", admin_router.merge(public_router))
         .merge(compat_router)
