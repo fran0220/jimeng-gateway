@@ -21,8 +21,8 @@ SyslogIdentifier=jimeng-gateway
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/jimeng-gateway/data
-ProtectHome=true
+ReadWritePaths=/opt/jimeng-gateway/data /tmp /root
+ProtectHome=false
 
 [Install]
 WantedBy=multi-user.target
