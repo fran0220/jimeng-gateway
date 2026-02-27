@@ -58,9 +58,12 @@ impl BrowserService {
 
         let mut config = BrowserConfig::builder()
             .no_sandbox()
+            .arg("--headless=new")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-gpu")
             .arg("--no-first-run")
+            .arg("--disable-background-networking")
+            .arg("--disable-extensions")
             .window_size(1920, 1080);
 
         if let Some(ref path) = self.chromium_path {
@@ -70,12 +73,18 @@ impl BrowserService {
         let config = config.build().map_err(|e| anyhow::anyhow!("Browser config error: {e}"))?;
         let (browser, mut handler) = Browser::launch(config).await?;
 
-        // Spawn handler task
+        // Spawn handler task — keep running even on non-fatal errors
         tokio::spawn(async move {
-            while let Some(event) = handler.next().await {
-                if event.is_err() {
-                    tracing::warn!("BrowserService: handler event error");
-                    break;
+            loop {
+                match handler.next().await {
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        tracing::debug!("BrowserService: handler event error: {e}");
+                    }
+                    None => {
+                        tracing::warn!("BrowserService: handler stream ended");
+                        break;
+                    }
                 }
             }
         });
