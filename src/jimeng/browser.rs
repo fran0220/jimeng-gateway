@@ -147,7 +147,7 @@ impl BrowserService {
             }
 
             let ready: bool = page.evaluate(
-                "window.bdms?.init || window.byted_acrawler || window.fetch.toString().indexOf('native code') === -1"
+                "!!(window.bdms?.init || window.byted_acrawler || window.fetch.toString().indexOf('native code') === -1)"
             ).await?.into_value()?;
 
             if ready {
