@@ -259,14 +259,20 @@ async fn update_status(queue: &TaskQueue, task_id: &str, status: &str) {
 }
 
 fn classify_error(msg: &str) -> &'static str {
-    let msg = msg.to_lowercase();
-    if msg.contains("authorization") || msg.contains("unauthorized") || msg.contains("login") || msg.contains("token") {
+    let msg_lower = msg.to_lowercase();
+    if msg_lower.contains("authorization") || msg_lower.contains("unauthorized") || msg_lower.contains("login") || msg_lower.contains("token") {
         "auth"
-    } else if msg.contains("timeout") || msg.contains("timed out") {
+    } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
         "timeout"
-    } else if msg.contains("平台规则") || msg.contains("内容违规") {
-        "platform_rule"
-    } else if msg.contains("network") || msg.contains("econnrefused") {
+    } else if msg_lower.contains("inputtextrisk") || msg_lower.contains("inputimagerisk")
+        || msg_lower.contains("outputimagerisk") || msg_lower.contains("outputvideorisk")
+        || msg_lower.contains("平台规则") || msg_lower.contains("内容违规")
+        || msg.contains("2038") || msg.contains("2039") || msg.contains("2040")
+    {
+        "content_risk"
+    } else if msg.contains("100402") {
+        "generation_failed"
+    } else if msg_lower.contains("network") || msg_lower.contains("econnrefused") {
         "network"
     } else {
         "unknown"
