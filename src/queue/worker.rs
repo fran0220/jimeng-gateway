@@ -215,33 +215,37 @@ async fn execute_task(
         if poll_result.status == poll::STATUS_FAILED {
             let fail_code = poll_result.fail_code.as_deref().unwrap_or("unknown");
             let fail_msg = poll_result.fail_msg.as_deref().unwrap_or("");
-            anyhow::bail!("Upstream task failed with code {fail_code}: {fail_msg}");
+            anyhow::bail!("{fail_code}: {fail_msg}");
         }
 
-        if let Some(ref video_url) = poll_result.video_url {
-            if !video_url.is_empty() {
-                update_status(queue, task_id, "downloading").await;
+        // Check for completed task (status=50 or video_url present)
+        if poll_result.status == poll::STATUS_SUCCEEDED || poll_result.video_url.is_some() {
+            if let Some(ref video_url) = poll_result.video_url {
+                if !video_url.is_empty() {
+                    update_status(queue, task_id, "downloading").await;
 
-                // Try to get high-quality URL
-                if let Some(ref item_id) = poll_result.item_id {
-                    match poll::fetch_hq_video_url(client, session_token, item_id).await {
-                        Ok(Some(hq_url)) => {
-                            tracing::info!(task_id, "Got HQ video URL");
-                            return Ok(hq_url);
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            tracing::warn!(task_id, error = %e, "Failed to get HQ video URL, using preview");
+                    // Try to get high-quality URL
+                    if let Some(ref item_id) = poll_result.item_id {
+                        match poll::fetch_hq_video_url(client, session_token, item_id).await {
+                            Ok(Some(hq_url)) => {
+                                tracing::info!(task_id, "Got HQ video URL");
+                                return Ok(hq_url);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!(task_id, error = %e, "Failed to get HQ video URL, using preview");
+                            }
                         }
                     }
-                }
 
-                return Ok(video_url.clone());
+                    return Ok(video_url.clone());
+                }
             }
+            // status=50 but no video_url yet — keep polling
         }
 
-        if poll_result.status != poll::STATUS_PENDING {
-            anyhow::bail!("Upstream returned status {} without video_url", poll_result.status);
+        if poll_result.status != poll::STATUS_PENDING && poll_result.status != poll::STATUS_SUCCEEDED {
+            anyhow::bail!("Unexpected status {} without video_url", poll_result.status);
         }
 
         tokio::time::sleep(poll_interval).await;

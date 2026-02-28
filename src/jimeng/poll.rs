@@ -10,6 +10,7 @@ const JIMENG_BASE: &str = "https://jimeng.jianying.com";
 /// Upstream status codes.
 pub const STATUS_PENDING: i64 = 20;
 pub const STATUS_FAILED: i64 = 30;
+pub const STATUS_SUCCEEDED: i64 = 50;
 
 /// Result of a single poll request.
 #[derive(Debug, Clone)]
@@ -72,17 +73,24 @@ pub async fn poll_status(
         .and_then(|v| v.as_i64())
         .unwrap_or(STATUS_PENDING);
 
-    let fail_code = history_data.get("fail_code")
-        .or_else(|| history_data.get("error_code"))
-        .and_then(|v| {
-            v.as_i64().map(|n| n.to_string())
-                .or_else(|| v.as_str().map(|s| s.to_string()))
+    let fail_code = history_data.get("fail_starling_key")
+        .and_then(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
+        .or_else(|| {
+            history_data.get("fail_code")
+                .or_else(|| history_data.get("error_code"))
+                .and_then(|v| {
+                    v.as_i64().map(|n| n.to_string())
+                        .or_else(|| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
+                })
         });
 
-    let fail_msg = history_data.get("fail_msg")
-        .or_else(|| history_data.get("error_msg"))
-        .or_else(|| history_data.get("message"))
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let fail_msg = history_data.get("fail_starling_message")
+        .and_then(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
+        .or_else(|| {
+            history_data.get("fail_msg")
+                .or_else(|| history_data.get("error_msg"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
 
     // Extract video URL from item_list
     let item_list = history_data.get("item_list")
