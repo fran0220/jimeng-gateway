@@ -170,13 +170,6 @@ async fn compat_models() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "object": "list",
         "data": [
-            { "id": "jimeng-video-seedance-2.0", "object": "model" },
-            { "id": "jimeng-video-seedance-2.0-fast", "object": "model" },
-            { "id": "jimeng-video-3.5-pro", "object": "model" },
-            { "id": "jimeng-video-3.0-pro", "object": "model" },
-            { "id": "jimeng-video-3.0", "object": "model" },
-            { "id": "jimeng-video-2.0-pro", "object": "model" },
-            { "id": "jimeng-video-2.0", "object": "model" },
             { "id": "seedance-2.0", "object": "model" },
             { "id": "seedance-2.0-pro", "object": "model" },
             { "id": "seedance-2.0-fast", "object": "model" },

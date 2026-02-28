@@ -147,9 +147,7 @@ async fn execute_task(
     .await?;
 
     let model_name = &task_meta.model;
-    let is_seedance = models::is_seedance_model(model_name);
-    let resolution = "720p"; // default resolution
-    let res = models::resolve_video_resolution(resolution, &task_meta.ratio)
+    let res = models::resolve_video_resolution("720p", &task_meta.ratio)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     update_status(queue, task_id, "submitting").await;
@@ -162,40 +160,19 @@ async fn execute_task(
         task_meta.request_content_type.as_deref(),
     ).await;
 
-    // Submit task
-    let submit_result = if is_seedance {
-        tracing::info!(task_id, materials_count = materials.len(), "Submitting Seedance task via browser proxy");
-        submit::submit_seedance_video(
-            client,
-            &state.browser,
-            session_token,
-            &task_meta.prompt,
-            model_name,
-            res.width,
-            res.height,
-            task_meta.duration as u32,
-            &materials,
-        ).await?
-    } else {
-        // For regular video: use first image as first_frame
-        let first_frame_uri = materials.iter()
-            .find(|m| m.material_type == MaterialType::Image)
-            .and_then(|m| m.uri.as_deref());
-
-        tracing::info!(task_id, ?first_frame_uri, "Submitting regular video task");
-        submit::submit_regular_video(
-            client,
-            session_token,
-            &task_meta.prompt,
-            model_name,
-            res.width,
-            res.height,
-            task_meta.duration as u32,
-            resolution,
-            first_frame_uri,
-            None, // end_frame
-        ).await?
-    };
+    // Submit task via browser proxy (a_bogus signing)
+    tracing::info!(task_id, materials_count = materials.len(), "Submitting Seedance task via browser proxy");
+    let submit_result = submit::submit_seedance_video(
+        client,
+        &state.browser,
+        session_token,
+        &task_meta.prompt,
+        model_name,
+        res.width,
+        res.height,
+        task_meta.duration as u32,
+        &materials,
+    ).await?;
 
     let history_record_id = submit_result.history_record_id;
     tracing::info!(task_id, %history_record_id, "Task submitted, starting poll");

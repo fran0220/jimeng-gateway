@@ -5,15 +5,8 @@ use std::collections::HashMap;
 /// Map user-facing model names to internal jimeng model keys.
 pub fn model_map() -> HashMap<&'static str, &'static str> {
     HashMap::from([
-        ("jimeng-video-3.5-pro", "dreamina_ic_generate_video_model_vgfm_3.5_pro"),
-        ("jimeng-video-3.0-pro", "dreamina_ic_generate_video_model_vgfm_3.0_pro"),
-        ("jimeng-video-3.0", "dreamina_ic_generate_video_model_vgfm_3.0"),
-        ("jimeng-video-2.0", "dreamina_ic_generate_video_model_vgfm_lite"),
-        ("jimeng-video-2.0-pro", "dreamina_ic_generate_video_model_vgfm1.0"),
-        ("jimeng-video-seedance-2.0", "dreamina_seedance_40_pro"),
         ("seedance-2.0", "dreamina_seedance_40_pro"),
         ("seedance-2.0-pro", "dreamina_seedance_40_pro"),
-        ("jimeng-video-seedance-2.0-fast", "dreamina_seedance_40"),
         ("seedance-2.0-fast", "dreamina_seedance_40"),
     ])
 }
@@ -21,32 +14,24 @@ pub fn model_map() -> HashMap<&'static str, &'static str> {
 /// Map model names to their draft content version.
 pub fn draft_version(model: &str) -> &'static str {
     match model {
-        "jimeng-video-3.5-pro" => "3.3.4",
-        "jimeng-video-3.0-pro" | "jimeng-video-3.0" | "jimeng-video-2.0" | "jimeng-video-2.0-pro" => "3.2.8",
-        "jimeng-video-seedance-2.0" | "seedance-2.0" | "seedance-2.0-pro"
-        | "jimeng-video-seedance-2.0-fast" | "seedance-2.0-fast" => "3.3.9",
-        _ => "3.2.8",
+        "seedance-2.0" | "seedance-2.0-pro" | "seedance-2.0-fast" => "3.3.9",
+        _ => "3.3.9",
     }
 }
 
-/// Map Seedance model names to their benefit_type.
+/// Map model names to their benefit_type.
 pub fn seedance_benefit_type(model: &str) -> &'static str {
     match model {
-        "jimeng-video-seedance-2.0" | "seedance-2.0" | "seedance-2.0-pro" => "dreamina_video_seedance_20_pro",
-        "jimeng-video-seedance-2.0-fast" | "seedance-2.0-fast" => "dreamina_seedance_20_fast",
+        "seedance-2.0" | "seedance-2.0-pro" => "dreamina_video_seedance_20_pro",
+        "seedance-2.0-fast" => "dreamina_seedance_20_fast",
         _ => "dreamina_video_seedance_20_pro",
     }
-}
-
-/// Check if a model name is a Seedance model.
-pub fn is_seedance_model(model: &str) -> bool {
-    model.starts_with("seedance-") || model.starts_with("jimeng-video-seedance-")
 }
 
 /// Resolve user model name to internal model key.
 pub fn resolve_model(model: &str) -> &str {
     let map = model_map();
-    map.get(model).copied().unwrap_or("dreamina_ic_generate_video_model_vgfm_3.0")
+    map.get(model).copied().unwrap_or("dreamina_seedance_40_pro")
 }
 
 /// Video resolution dimensions.
