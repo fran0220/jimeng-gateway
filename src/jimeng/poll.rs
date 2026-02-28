@@ -114,25 +114,29 @@ pub async fn poll_status(
         (None, None)
     };
 
-    // Extract queue info
-    let queue_info = history_data.get("queue_info")
-        .or_else(|| history_data.pointer("/task/queue_info"))
-        .or_else(|| history_data.get("queue"));
+    // Extract queue info from queue_info object
+    let queue_info = history_data.get("queue_info");
 
     let (queue_position, queue_total, queue_eta) = if let Some(qi) = queue_info {
-        let pos = qi.get("queue_position").or_else(|| qi.get("position"))
+        let pos = qi.get("queue_idx")
             .and_then(|v| v.as_i64().map(|n| n as i32));
-        let total = qi.get("queue_total").or_else(|| qi.get("total"))
+        let total = qi.get("queue_length")
             .and_then(|v| v.as_i64().map(|n| n as i32));
-        let eta = qi.get("queue_eta").or_else(|| qi.get("eta"))
-            .or_else(|| qi.get("remain_time_desc"))
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        // ETA from forecast_queue_cost (seconds) at top level
+        let forecast_secs = history_data.get("forecast_queue_cost")
+            .and_then(|v| v.as_i64());
+        let eta = forecast_secs.map(|s| {
+            if s >= 3600 {
+                format!("{}h{}m", s / 3600, (s % 3600) / 60)
+            } else if s >= 60 {
+                format!("{}m{}s", s / 60, s % 60)
+            } else {
+                format!("{}s", s)
+            }
+        });
         (pos, total, eta)
     } else {
-        let pos = history_data.get("queue_position").and_then(|v| v.as_i64().map(|n| n as i32));
-        let total = history_data.get("queue_total").and_then(|v| v.as_i64().map(|n| n as i32));
-        let eta = history_data.get("queue_eta").and_then(|v| v.as_str().map(|s| s.to_string()));
-        (pos, total, eta)
+        (None, None, None)
     };
 
     Ok(PollResult {
