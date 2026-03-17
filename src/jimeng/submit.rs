@@ -238,6 +238,9 @@ pub async fn submit_seedance_video(
 }
 
 /// Submit an image generation task via direct HTTP (no browser proxy needed).
+///
+/// When `reference_image_uris` is non-empty, uses blend mode (image-to-image)
+/// instead of generate mode (text-to-image).
 pub async fn submit_image_generation(
     client: &Client,
     session_token: &str,
@@ -249,20 +252,39 @@ pub async fn submit_image_generation(
     resolution_type: &str,
     sample_strength: f64,
     negative_prompt: &str,
+    reference_image_uris: &[String],
 ) -> Result<SubmitResult> {
     let internal_model = models::resolve_image_model(model_name);
-    let draft_version = models::draft_version(model_name);
+    let is_blend = !reference_image_uris.is_empty();
 
     let component_id = uuid::Uuid::new_v4().to_string();
     let submit_id = uuid::Uuid::new_v4().to_string();
     let seed = rand::random::<u32>() % 100000000 + 2500000000;
+
+    // Blend mode uses different versions
+    let draft_version = if is_blend { "3.2.9" } else { models::draft_version(model_name) };
+    let min_version = if is_blend { "3.2.9" } else { "3.0.2" };
+
+    let ability_list_scene: Vec<serde_json::Value> = if is_blend {
+        reference_image_uris.iter().map(|_| {
+            serde_json::json!({
+                "abilityName": "byte_edit",
+                "strength": sample_strength,
+                "source": {
+                    "imageUrl": format!("blob:https://jimeng.jianying.com/{}", uuid::Uuid::new_v4())
+                }
+            })
+        }).collect()
+    } else {
+        Vec::new()
+    };
 
     let scene_option = serde_json::json!({
         "type": "image",
         "scene": "ImageBasicGenerate",
         "modelReqKey": model_name,
         "resolutionType": resolution_type,
-        "abilityList": [],
+        "abilityList": ability_list_scene,
         "reportParams": {
             "enterSource": "generate",
             "vipSource": "generate",
@@ -280,10 +302,94 @@ pub async fn submit_image_generation(
         "isRegenerate": false
     }).to_string();
 
+    // Build abilities block: "generate" for text-to-image, "blend" for image-to-image
+    let (generate_type, abilities) = if is_blend {
+        let blend_prompt = format!("{}{}", "##".repeat(reference_image_uris.len()), prompt);
+
+        let ability_list: Vec<serde_json::Value> = reference_image_uris.iter().map(|uri| {
+            serde_json::json!({
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "name": "byte_edit",
+                "image_uri_list": [uri],
+                "image_list": [{
+                    "type": "image", "id": uuid::Uuid::new_v4().to_string(),
+                    "source_from": "upload", "platform_type": 1, "name": "",
+                    "image_uri": uri, "width": 0, "height": 0,
+                    "format": "", "uri": uri
+                }],
+                "strength": 0.5
+            })
+        }).collect();
+
+        let placeholder_list: Vec<serde_json::Value> = (0..reference_image_uris.len()).map(|i| {
+            serde_json::json!({
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "ability_index": i
+            })
+        }).collect();
+
+        ("blend", serde_json::json!({
+            "type": "", "id": uuid::Uuid::new_v4().to_string(),
+            "blend": {
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "min_version": "3.2.9",
+                "min_features": [],
+                "core_param": {
+                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                    "model": internal_model,
+                    "prompt": blend_prompt,
+                    "sample_strength": sample_strength,
+                    "image_ratio": image_ratio,
+                    "large_image_info": {
+                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                        "height": height,
+                        "width": width,
+                        "resolution_type": resolution_type
+                    },
+                    "intelligent_ratio": false
+                },
+                "ability_list": ability_list,
+                "prompt_placeholder_info_list": placeholder_list,
+                "postedit_param": {
+                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                    "generate_type": 0
+                }
+            }
+        }))
+    } else {
+        ("generate", serde_json::json!({
+            "type": "", "id": uuid::Uuid::new_v4().to_string(),
+            "generate": {
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "core_param": {
+                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                    "model": internal_model,
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "seed": seed,
+                    "sample_strength": sample_strength,
+                    "image_ratio": image_ratio,
+                    "large_image_info": {
+                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                        "min_version": "3.0.2",
+                        "height": height,
+                        "width": width,
+                        "resolution_type": resolution_type
+                    },
+                    "intelligent_ratio": false
+                },
+                "gen_option": {
+                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                    "generate_all": false
+                }
+            }
+        }))
+    };
+
     let draft_content = serde_json::json!({
         "type": "draft",
         "id": uuid::Uuid::new_v4().to_string(),
-        "min_version": "3.0.2",
+        "min_version": min_version,
         "min_features": [],
         "is_from_tsn": true,
         "version": draft_version,
@@ -300,34 +406,8 @@ pub async fn submit_image_generation(
                 "created_time_in_ms": chrono::Utc::now().timestamp_millis().to_string(),
                 "created_did": ""
             },
-            "generate_type": "generate",
-            "abilities": {
-                "type": "", "id": uuid::Uuid::new_v4().to_string(),
-                "generate": {
-                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
-                    "core_param": {
-                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
-                        "model": internal_model,
-                        "prompt": prompt,
-                        "negative_prompt": negative_prompt,
-                        "seed": seed,
-                        "sample_strength": sample_strength,
-                        "image_ratio": image_ratio,
-                        "large_image_info": {
-                            "type": "", "id": uuid::Uuid::new_v4().to_string(),
-                            "min_version": "3.0.2",
-                            "height": height,
-                            "width": width,
-                            "resolution_type": resolution_type
-                        },
-                        "intelligent_ratio": false
-                    },
-                    "gen_option": {
-                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
-                        "generate_all": false
-                    }
-                }
-            }
+            "generate_type": generate_type,
+            "abilities": abilities
         }]
     });
 

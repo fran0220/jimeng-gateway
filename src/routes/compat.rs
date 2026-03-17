@@ -61,7 +61,8 @@ async fn compat_video_generations(
 
     // Extract fields from multipart or JSON body
     let (prompt, model, duration, ratio) = if content_type.contains("multipart") {
-        extract_multipart_fields(content_type, &body)
+        let f = extract_multipart_fields(content_type, &body);
+        (f.prompt, f.model, f.duration, f.ratio)
     } else {
         // Try JSON
         match serde_json::from_slice::<serde_json::Value>(&body) {
@@ -120,8 +121,17 @@ async fn compat_video_generations(
     ))
 }
 
+/// Parsed text fields from a multipart form body.
+struct MultipartFields {
+    prompt: String,
+    model: Option<String>,
+    duration: Option<i32>,
+    ratio: Option<String>,
+    resolution: Option<String>,
+}
+
 /// Parse multipart form data to extract text fields.
-fn extract_multipart_fields(content_type: &str, body: &[u8]) -> (String, Option<String>, Option<i32>, Option<String>) {
+fn extract_multipart_fields(content_type: &str, body: &[u8]) -> MultipartFields {
     let boundary = content_type
         .split("boundary=")
         .nth(1)
@@ -129,14 +139,17 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> (String, Option<
         .trim();
 
     if boundary.is_empty() {
-        return (String::new(), None, None, None);
+        return MultipartFields { prompt: String::new(), model: None, duration: None, ratio: None, resolution: None };
     }
 
     let body_str = String::from_utf8_lossy(body);
-    let mut prompt = String::new();
-    let mut model = None;
-    let mut duration = None;
-    let mut ratio = None;
+    let mut fields = MultipartFields {
+        prompt: String::new(),
+        model: None,
+        duration: None,
+        ratio: None,
+        resolution: None,
+    };
 
     // Simple multipart parser for text fields
     for part in body_str.split(&format!("--{boundary}")) {
@@ -154,10 +167,11 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> (String, Option<
                 if let Some(value_start) = part.find("\r\n\r\n") {
                     let value = part[value_start + 4..].trim_end_matches("\r\n").trim();
                     match name {
-                        "prompt" => prompt = value.to_string(),
-                        "model" => model = Some(value.to_string()),
-                        "duration" => duration = value.parse().ok(),
-                        "ratio" => ratio = Some(value.to_string()),
+                        "prompt" => fields.prompt = value.to_string(),
+                        "model" => fields.model = Some(value.to_string()),
+                        "duration" => fields.duration = value.parse().ok(),
+                        "ratio" => fields.ratio = Some(value.to_string()),
+                        "resolution" => fields.resolution = Some(value.to_string()),
                         _ => {}
                     }
                 }
@@ -165,7 +179,7 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> (String, Option<
         }
     }
 
-    (prompt, model, duration, ratio)
+    fields
 }
 
 async fn compat_models() -> Json<serde_json::Value> {
@@ -257,8 +271,8 @@ async fn compat_image_generations(
 
     // Parse request fields
     let (prompt, model, mut ratio, mut resolution) = if content_type.contains("multipart") {
-        let (p, m, _dur, r) = extract_multipart_fields(content_type, &body);
-        (p, m, r, None::<String>)
+        let f = extract_multipart_fields(content_type, &body);
+        (f.prompt, f.model, f.ratio, f.resolution)
     } else {
         match serde_json::from_slice::<serde_json::Value>(&body) {
             Ok(v) => {
@@ -302,6 +316,13 @@ async fn compat_image_generations(
     if ratio.is_none() { ratio = Some("1:1".to_string()); }
     if resolution.is_none() { resolution = Some("2k".to_string()); }
 
+    // For multipart requests, pass the raw body so the worker can extract reference images
+    let (request_body, request_ct) = if content_type.contains("multipart") {
+        (Some(body.to_vec()), Some(content_type.to_string()))
+    } else {
+        (None, None)
+    };
+
     let req = CreateTaskRequest {
         prompt,
         duration: None,
@@ -313,7 +334,7 @@ async fn compat_image_generations(
 
     let task = state
         .queue
-        .enqueue(req, None, None)
+        .enqueue(req, request_body, request_ct)
         .await
         .map_err(|e| {
             (

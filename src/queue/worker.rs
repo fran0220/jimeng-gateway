@@ -160,7 +160,19 @@ async fn execute_task(
 
         update_status(queue, task_id, "submitting").await;
 
-        tracing::info!(task_id, "Submitting image generation task via direct HTTP");
+        // Process uploaded reference images from multipart body
+        let materials = process_materials(
+            client,
+            session_token,
+            task_meta.request_body.as_deref(),
+            task_meta.request_content_type.as_deref(),
+        ).await;
+
+        let reference_uris: Vec<String> = materials.iter()
+            .filter_map(|m| m.uri.clone())
+            .collect();
+
+        tracing::info!(task_id, ref_images = reference_uris.len(), "Submitting image generation task via direct HTTP");
         let submit_result = submit::submit_image_generation(
             client,
             session_token,
@@ -172,6 +184,7 @@ async fn execute_task(
             resolution_str,
             0.5,
             "",
+            &reference_uris,
         ).await?;
 
         let history_record_id = submit_result.history_record_id;
