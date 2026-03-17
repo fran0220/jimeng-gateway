@@ -19,6 +19,7 @@ pub struct PollResult {
     pub fail_code: Option<String>,
     pub fail_msg: Option<String>,
     pub video_url: Option<String>,
+    pub image_urls: Vec<String>,
     pub queue_position: Option<i32>,
     pub queue_total: Option<i32>,
     pub queue_eta: Option<String>,
@@ -122,6 +123,24 @@ pub async fn poll_status(
         (None, None)
     };
 
+    // Extract image URLs from item_list
+    let image_urls = if let Some(items) = item_list {
+        items.iter().filter_map(|item| {
+            item.pointer("/image/large_images/0/image_url")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    item.pointer("/common_attr/cover_url")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                })
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
     // Extract queue info from queue_info object
     let queue_info = history_data.get("queue_info");
 
@@ -152,6 +171,7 @@ pub async fn poll_status(
         fail_code,
         fail_msg,
         video_url,
+        image_urls,
         queue_position,
         queue_total,
         queue_eta,

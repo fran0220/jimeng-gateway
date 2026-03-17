@@ -237,6 +237,166 @@ pub async fn submit_seedance_video(
     Ok(SubmitResult { history_record_id: history_id })
 }
 
+/// Submit an image generation task via direct HTTP (no browser proxy needed).
+pub async fn submit_image_generation(
+    client: &Client,
+    session_token: &str,
+    prompt: &str,
+    model_name: &str,
+    width: u32,
+    height: u32,
+    image_ratio: u32,
+    resolution_type: &str,
+    sample_strength: f64,
+    negative_prompt: &str,
+) -> Result<SubmitResult> {
+    let internal_model = models::resolve_image_model(model_name);
+    let draft_version = models::draft_version(model_name);
+
+    let component_id = uuid::Uuid::new_v4().to_string();
+    let submit_id = uuid::Uuid::new_v4().to_string();
+    let seed = rand::random::<u32>() % 100000000 + 2500000000;
+
+    let scene_option = serde_json::json!({
+        "type": "image",
+        "scene": "ImageBasicGenerate",
+        "modelReqKey": model_name,
+        "resolutionType": resolution_type,
+        "abilityList": [],
+        "reportParams": {
+            "enterSource": "generate",
+            "vipSource": "generate",
+            "extraVipFunctionKey": format!("{model_name}-{resolution_type}"),
+            "useVipFunctionDetailsReporterHoc": true
+        }
+    });
+
+    let metrics_extra = serde_json::json!({
+        "promptSource": "custom",
+        "generateCount": 1,
+        "enterFrom": "click",
+        "sceneOptions": serde_json::json!([scene_option]).to_string(),
+        "generateId": submit_id,
+        "isRegenerate": false
+    }).to_string();
+
+    let draft_content = serde_json::json!({
+        "type": "draft",
+        "id": uuid::Uuid::new_v4().to_string(),
+        "min_version": "3.0.2",
+        "min_features": [],
+        "is_from_tsn": true,
+        "version": draft_version,
+        "main_component_id": component_id,
+        "component_list": [{
+            "type": "image_base_component",
+            "id": component_id,
+            "min_version": "3.0.2",
+            "aigc_mode": "workbench",
+            "metadata": {
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "created_platform": 3,
+                "created_platform_version": "",
+                "created_time_in_ms": chrono::Utc::now().timestamp_millis().to_string(),
+                "created_did": ""
+            },
+            "generate_type": "generate",
+            "abilities": {
+                "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                "generate": {
+                    "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                    "core_param": {
+                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                        "model": internal_model,
+                        "prompt": prompt,
+                        "negative_prompt": negative_prompt,
+                        "seed": seed,
+                        "sample_strength": sample_strength,
+                        "image_ratio": image_ratio,
+                        "large_image_info": {
+                            "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                            "min_version": "3.0.2",
+                            "height": height,
+                            "width": width,
+                            "resolution_type": resolution_type
+                        },
+                        "intelligent_ratio": false
+                    },
+                    "gen_option": {
+                        "type": "", "id": uuid::Uuid::new_v4().to_string(),
+                        "generate_all": false
+                    }
+                }
+            }
+        }]
+    });
+
+    let body = serde_json::json!({
+        "extend": {
+            "root_model": internal_model
+        },
+        "submit_id": submit_id,
+        "metrics_extra": metrics_extra,
+        "draft_content": draft_content.to_string(),
+        "http_common_info": {
+            "aid": auth::DEFAULT_ASSISTANT_ID
+        }
+    });
+
+    let uri = "/mweb/v1/aigc_draft/generate";
+    let headers = auth::build_headers(session_token, uri);
+
+    let params: Vec<(&str, String)> = vec![
+        ("aid", auth::DEFAULT_ASSISTANT_ID.to_string()),
+        ("device_platform", "web".to_string()),
+        ("region", "cn".to_string()),
+        ("webId", auth::standard_query_params().iter().find(|(k,_)| *k == "webId").map(|(_,v)| v.clone()).unwrap_or_default()),
+        ("da_version", draft_version.to_string()),
+        ("web_component_open_flag", "1".to_string()),
+        ("web_version", "7.5.0".to_string()),
+        ("aigc_features", "app_lip_sync".to_string()),
+    ];
+
+    let resp = client.post(format!("{JIMENG_BASE}{uri}"))
+        .headers(headers)
+        .query(&params)
+        .json(&body)
+        .send().await?;
+
+    let status_code = resp.status();
+    let text = resp.text().await?;
+
+    if !status_code.is_success() {
+        bail!("Image submit HTTP {status_code}: {}", &text[..text.len().min(500)]);
+    }
+
+    let payload: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("Image submit parse error: {e}. Body: {}", &text[..text.len().min(500)]))?;
+
+    if let Some(ret) = payload.get("ret") {
+        let ret_num = ret.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| ret.as_i64()).unwrap_or(0);
+        if ret_num != 0 {
+            let errmsg = payload.get("errmsg").and_then(|v| v.as_str()).unwrap_or("unknown");
+            bail!("Image submit failed [ret={ret_num}]: {errmsg}");
+        }
+    }
+
+    let history_id = payload.pointer("/data/aigc_data/history_record_id")
+        .or_else(|| payload.pointer("/aigc_data/history_record_id"))
+        .or_else(|| payload.pointer("/data/history_record_id"));
+
+    let history_id = match history_id {
+        Some(v) => {
+            if let Some(s) = v.as_str() { s.to_string() }
+            else if let Some(n) = v.as_i64() { n.to_string() }
+            else { bail!("Unexpected history_record_id type in image response") }
+        }
+        None => bail!("No history_record_id in image submit response"),
+    };
+
+    Ok(SubmitResult { history_record_id: history_id })
+}
+
 /// Build meta_list from prompt placeholders (@1, @2, @图1, @image1).
 fn build_meta_list(prompt: &str, materials: &[UploadedMaterial]) -> Vec<serde_json::Value> {
     let mut meta_list = Vec::new();

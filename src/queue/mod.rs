@@ -70,6 +70,7 @@ pub struct CreateTaskRequest {
     pub duration: Option<i32>,
     pub ratio: Option<String>,
     pub model: Option<String>,
+    pub resolution: Option<String>,
     /// Base64-encoded files or file URLs.
     pub files: Option<Vec<FileInput>>,
 }
@@ -116,16 +117,18 @@ impl TaskQueue {
         let model = req.model.unwrap_or_else(|| "jimeng-video-seedance-2.0".to_string());
         let duration = req.duration.unwrap_or(4);
         let ratio = req.ratio.unwrap_or_else(|| "9:16".to_string());
+        let resolution = req.resolution;
 
         sqlx::query(
-            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, request_body, request_content_type, created_at, updated_at) \
-             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, resolution, request_body, request_content_type, created_at, updated_at) \
+             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&model)
         .bind(&req.prompt)
         .bind(duration)
         .bind(&ratio)
+        .bind(&resolution)
         .bind(&request_body)
         .bind(&request_content_type)
         .bind(&now)
@@ -223,7 +226,7 @@ impl TaskQueue {
     /// Retry a task by cloning its original payload into a new queued record.
     pub async fn retry_task(&self, id: &str) -> Result<Option<TaskRecord>> {
         let src = sqlx::query_as::<_, RetryTaskRow>(
-            "SELECT model, prompt, duration, ratio, request_body, request_content_type \
+            "SELECT model, prompt, duration, ratio, resolution, request_body, request_content_type \
              FROM tasks WHERE id = ?",
         )
         .bind(id)
@@ -239,6 +242,7 @@ impl TaskQueue {
             duration: Some(src.duration),
             ratio: Some(src.ratio),
             model: Some(src.model),
+            resolution: src.resolution,
             files: None,
         };
 
@@ -359,6 +363,7 @@ struct RetryTaskRow {
     prompt: String,
     duration: i32,
     ratio: String,
+    resolution: Option<String>,
     request_body: Option<Vec<u8>>,
     request_content_type: Option<String>,
 }

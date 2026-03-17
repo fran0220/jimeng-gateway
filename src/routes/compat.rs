@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Extension, Json, Router,
@@ -11,7 +12,7 @@ use axum::{
 use crate::AppState;
 use crate::auth::middleware::{Caller, require_scope};
 use crate::auth::usage as usage_tracker;
-use crate::queue::CreateTaskRequest;
+use crate::queue::{CreateTaskRequest, TaskStatus};
 
 /// Compatibility layer: accepts the same API format as jimeng-free-api-all
 /// but converts to async task model internally.
@@ -79,6 +80,7 @@ async fn compat_video_generations(
         duration,
         ratio,
         model,
+        resolution: None,
         files: None,
     };
 
@@ -173,6 +175,7 @@ async fn compat_models() -> Json<serde_json::Value> {
             { "id": "seedance-2.0", "object": "model" },
             { "id": "seedance-2.0-pro", "object": "model" },
             { "id": "seedance-2.0-fast", "object": "model" },
+            { "id": "jimeng-5.0", "object": "model" },
         ]
     }))
 }
@@ -181,9 +184,243 @@ async fn compat_ping() -> &'static str {
     "pong"
 }
 
+/// Parse OpenAI `size` field (e.g. "1024x1024", "2560x1440") into (ratio, resolution).
+///
+/// First tries exact match against all supported pixel dimensions.
+/// Falls back to nearest ratio/tier for non-standard sizes.
+fn parse_openai_size(size: &str) -> Result<(String, String), String> {
+    let parts: Vec<&str> = size.split('x').collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid size format: \"{size}\". Use WIDTHxHEIGHT (e.g. \"1024x1024\")."));
+    }
+    let w: u32 = parts[0].parse().map_err(|_| format!("Invalid width in size: \"{size}\""))?;
+    let h: u32 = parts[1].parse().map_err(|_| format!("Invalid height in size: \"{size}\""))?;
+
+    // Exact match against supported resolution table
+    if let Some((ratio, res)) = crate::jimeng::models::lookup_image_size(w, h) {
+        return Ok((ratio.to_string(), res.to_string()));
+    }
+
+    Err(format!(
+        "Unsupported size: \"{size}\". Supported sizes: \
+         1k: 1024x1024, 768x1024, 1024x768, 1024x576, 576x1024, 1024x682, 682x1024, 1195x512 | \
+         2k: 2048x2048, 2304x1728, 1728x2304, 2560x1440, 1440x2560, 2496x1664, 1664x2496, 3024x1296 | \
+         4k: 4096x4096, 4608x3456, 3456x4608, 5120x2880, 2880x5120, 4992x3328, 3328x4992, 6048x2592"
+    ))
+}
+
+/// OpenAI-compatible `POST /v1/images/generations`.
+///
+/// Accepts standard OpenAI fields: `prompt`, `model`, `size`, `n`, `response_format`.
+/// Also accepts extensions: `ratio`, `resolution`.
+///
+/// Synchronous: enqueues task, waits for completion, returns OpenAI response format.
+async fn compat_image_generations(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Scope check
+    if let Err(resp) = require_scope(&caller, "video:create") {
+        let (parts, body) = resp.into_parts();
+        let bytes = axum::body::to_bytes(body, 4096).await.unwrap_or_default();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        return Err((parts.status, Json(json)));
+    }
+
+    // Daily quota check for API key callers
+    if let Caller::ApiKey { ref key_id, daily_quota, .. } = caller {
+        if daily_quota > 0 {
+            let today_tasks = usage_tracker::today_task_count(&state.db.pool, key_id)
+                .await
+                .unwrap_or(0);
+            if today_tasks >= daily_quota {
+                return Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": "Daily quota exceeded",
+                            "type": "rate_limit_error",
+                            "code": "daily_quota_exceeded"
+                        }
+                    })),
+                ));
+            }
+        }
+    }
+
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Parse request fields
+    let (prompt, model, mut ratio, mut resolution) = if content_type.contains("multipart") {
+        let (p, m, _dur, r) = extract_multipart_fields(content_type, &body);
+        (p, m, r, None::<String>)
+    } else {
+        match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(v) => {
+                // If OpenAI `size` field is provided, parse it into ratio/resolution
+                let (size_ratio, size_resolution) = if let Some(size) = v.get("size").and_then(|v| v.as_str()) {
+                    let (r, res) = parse_openai_size(size).map_err(|e| {
+                        (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                            "error": { "message": e, "type": "invalid_request_error", "code": "invalid_size" }
+                        })))
+                    })?;
+                    (Some(r), Some(res))
+                } else {
+                    (None, None)
+                };
+
+                (
+                    v.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    v.get("model").and_then(|v| v.as_str()).map(String::from),
+                    v.get("ratio").and_then(|v| v.as_str()).map(String::from).or(size_ratio),
+                    v.get("resolution").and_then(|v| v.as_str()).map(String::from).or(size_resolution),
+                )
+            }
+            Err(_) => ("".to_string(), None, None, None),
+        }
+    };
+
+    if prompt.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "prompt is required",
+                    "type": "invalid_request_error",
+                    "code": "missing_required_parameter"
+                }
+            })),
+        ));
+    }
+
+    // Apply defaults
+    if ratio.is_none() { ratio = Some("1:1".to_string()); }
+    if resolution.is_none() { resolution = Some("2k".to_string()); }
+
+    let req = CreateTaskRequest {
+        prompt,
+        duration: None,
+        ratio,
+        model: model.or_else(|| Some("jimeng-5.0".to_string())),
+        resolution,
+        files: None,
+    };
+
+    let task = state
+        .queue
+        .enqueue(req, None, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": { "message": e.to_string(), "type": "server_error" }
+                })),
+            )
+        })?;
+
+    // Record task creation for daily quota tracking
+    if let Some(key_id) = caller.key_id() {
+        usage_tracker::record_task(&state.db.pool, key_id).await;
+    }
+
+    let task_id = task.id.clone();
+
+    // Synchronous wait: poll DB until task completes (up to max_poll_duration)
+    let max_wait = Duration::from_secs(state.config.max_poll_duration_secs.max(60) + 30);
+    let poll_interval = Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + max_wait;
+
+    loop {
+        tokio::time::sleep(poll_interval).await;
+
+        let task = state.queue.get_task(&task_id).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": { "message": e.to_string(), "type": "server_error" }
+                })),
+            )
+        })?;
+
+        let task = match task {
+            Some(t) => t,
+            None => return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": { "message": "Task not found", "type": "server_error" }
+                })),
+            )),
+        };
+
+        match task.status {
+            TaskStatus::Succeeded => {
+                let created = chrono::Utc::now().timestamp();
+                let urls: Vec<&str> = task.video_url.as_deref()
+                    .unwrap_or("")
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let data: Vec<serde_json::Value> = urls.iter().map(|url| {
+                    serde_json::json!({ "url": url, "revised_prompt": task.prompt })
+                }).collect();
+
+                return Ok(Json(serde_json::json!({
+                    "created": created,
+                    "data": data,
+                })));
+            }
+            TaskStatus::Failed | TaskStatus::Cancelled => {
+                let err_msg = task.error_message.unwrap_or_else(|| "Generation failed".to_string());
+                let err_kind = task.error_kind.unwrap_or_else(|| "unknown".to_string());
+
+                let (status, code) = match err_kind.as_str() {
+                    "content_risk" => (StatusCode::BAD_REQUEST, "content_policy_violation"),
+                    "quota" => (StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded"),
+                    "auth" | "account_blocked" => (StatusCode::UNAUTHORIZED, "authentication_error"),
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "server_error"),
+                };
+
+                return Err((
+                    status,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": err_msg,
+                            "type": code,
+                            "code": err_kind,
+                        }
+                    })),
+                ));
+            }
+            _ => {
+                // Still in progress
+                if tokio::time::Instant::now() >= deadline {
+                    return Err((
+                        StatusCode::GATEWAY_TIMEOUT,
+                        Json(serde_json::json!({
+                            "error": {
+                                "message": "Image generation timed out",
+                                "type": "timeout_error",
+                                "code": "timeout"
+                            }
+                        })),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 pub fn compat_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/videos/generations", post(compat_video_generations))
+        .route("/v1/images/generations", post(compat_image_generations))
         .route("/v1/models", get(compat_models))
         .with_state(state)
 }

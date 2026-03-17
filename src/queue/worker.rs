@@ -120,9 +120,9 @@ pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
 
                 let _ = queue.pool.release_session(&session.id, false, Some(&err_msg)).await;
 
-                if err_kind == "auth" {
+                if err_kind == "auth" || err_kind == "account_blocked" {
                     let _ = queue.pool.mark_unhealthy(&session.id).await;
-                    tracing::warn!(task_id, session = session.id, "Session marked unhealthy");
+                    tracing::warn!(task_id, session = session.id, kind = err_kind, "Session marked unhealthy");
                 }
 
                 tracing::error!(task_id, error = %e, "Task failed");
@@ -140,115 +140,196 @@ async fn execute_task(
     session_token: &str,
 ) -> Result<String> {
     let task_meta = sqlx::query_as::<_, TaskMetaRow>(
-        "SELECT prompt, duration, ratio, model, request_body, request_content_type FROM tasks WHERE id = ?",
+        "SELECT prompt, duration, ratio, model, resolution, request_body, request_content_type FROM tasks WHERE id = ?",
     )
     .bind(task_id)
     .fetch_one(&queue.db.pool)
     .await?;
 
     let model_name = &task_meta.model;
-    let res = models::resolve_video_resolution("720p", &task_meta.ratio)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    update_status(queue, task_id, "submitting").await;
-
-    // Process uploaded materials from multipart body
-    let materials = process_materials(
-        client,
-        session_token,
-        task_meta.request_body.as_deref(),
-        task_meta.request_content_type.as_deref(),
-    ).await;
-
-    // Submit task via browser proxy (a_bogus signing)
-    tracing::info!(task_id, materials_count = materials.len(), "Submitting Seedance task via browser proxy");
-    let submit_result = submit::submit_seedance_video(
-        client,
-        &state.browser,
-        session_token,
-        &task_meta.prompt,
-        model_name,
-        res.width,
-        res.height,
-        task_meta.duration as u32,
-        &materials,
-    ).await?;
-
-    let history_record_id = submit_result.history_record_id;
-    tracing::info!(task_id, %history_record_id, "Task submitted, starting poll");
-
-    let _ = sqlx::query(
-        "UPDATE tasks SET status = 'polling', history_record_id = ?, updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(&history_record_id)
-    .bind(task_id)
-    .execute(&queue.db.pool)
-    .await;
+    let is_image = models::is_image_model(model_name);
 
     // Poll for results
     let poll_interval = Duration::from_secs(state.config.poll_interval_secs.max(1));
     let deadline = Instant::now() + Duration::from_secs(state.config.max_poll_duration_secs.max(60));
 
-    loop {
-        if is_task_cancelled(queue, task_id).await {
-            anyhow::bail!("Task cancelled");
-        }
+    if is_image {
+        let resolution_str = task_meta.resolution.as_deref().unwrap_or("2k");
+        let image_res = models::resolve_image_resolution(resolution_str, &task_meta.ratio)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        if Instant::now() >= deadline {
-            anyhow::bail!("Polling timed out after {}s", state.config.max_poll_duration_secs);
-        }
+        update_status(queue, task_id, "submitting").await;
 
-        let poll_result = poll::poll_status(client, session_token, &history_record_id).await?;
+        tracing::info!(task_id, "Submitting image generation task via direct HTTP");
+        let submit_result = submit::submit_image_generation(
+            client,
+            session_token,
+            &task_meta.prompt,
+            model_name,
+            image_res.width,
+            image_res.height,
+            image_res.ratio_code,
+            resolution_str,
+            0.5,
+            "",
+        ).await?;
 
-        // Update queue progress
+        let history_record_id = submit_result.history_record_id;
+        tracing::info!(task_id, %history_record_id, "Image task submitted, starting poll");
+
         let _ = sqlx::query(
-            "UPDATE tasks SET status = 'polling', queue_position = ?, queue_total = ?, \
-             queue_eta = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE tasks SET status = 'polling', history_record_id = ?, updated_at = datetime('now') WHERE id = ?",
         )
-        .bind(poll_result.queue_position)
-        .bind(poll_result.queue_total)
-        .bind(&poll_result.queue_eta)
+        .bind(&history_record_id)
         .bind(task_id)
         .execute(&queue.db.pool)
         .await;
 
-        if poll_result.status == poll::STATUS_FAILED {
-            let fail_code = poll_result.fail_code.as_deref().unwrap_or("unknown");
-            let fail_msg = poll_result.fail_msg.as_deref().unwrap_or("");
-            anyhow::bail!("{fail_code}: {fail_msg}");
+        loop {
+            if is_task_cancelled(queue, task_id).await {
+                anyhow::bail!("Task cancelled");
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("Polling timed out after {}s", state.config.max_poll_duration_secs);
+            }
+
+            let poll_result = poll::poll_status(client, session_token, &history_record_id).await?;
+
+            let _ = sqlx::query(
+                "UPDATE tasks SET status = 'polling', queue_position = ?, queue_total = ?, \
+                 queue_eta = ?, updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(poll_result.queue_position)
+            .bind(poll_result.queue_total)
+            .bind(&poll_result.queue_eta)
+            .bind(task_id)
+            .execute(&queue.db.pool)
+            .await;
+
+            if poll_result.status == poll::STATUS_FAILED {
+                let fail_code = poll_result.fail_code.as_deref().unwrap_or("unknown");
+                let fail_msg = poll_result.fail_msg.as_deref().unwrap_or("");
+                anyhow::bail!("{fail_code}: {fail_msg}");
+            }
+
+            if !poll_result.image_urls.is_empty() {
+                return Ok(poll_result.image_urls.join(","));
+            }
+
+            if poll_result.status == poll::STATUS_SUCCEEDED {
+                if !poll_result.image_urls.is_empty() {
+                    return Ok(poll_result.image_urls.join(","));
+                }
+                // status=50 but no image_urls yet — keep polling briefly
+            }
+
+            if poll_result.status != poll::STATUS_PENDING && poll_result.status != poll::STATUS_SUCCEEDED {
+                anyhow::bail!("Unexpected status {} without image URLs", poll_result.status);
+            }
+
+            tokio::time::sleep(poll_interval).await;
         }
+    } else {
+        // Video generation path
+        let res = models::resolve_video_resolution("720p", &task_meta.ratio)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Check for completed task (status=50 or video_url present)
-        if poll_result.status == poll::STATUS_SUCCEEDED || poll_result.video_url.is_some() {
-            if let Some(ref video_url) = poll_result.video_url {
-                if !video_url.is_empty() {
-                    update_status(queue, task_id, "downloading").await;
+        update_status(queue, task_id, "submitting").await;
 
-                    // Try to get high-quality URL
-                    if let Some(ref item_id) = poll_result.item_id {
-                        match poll::fetch_hq_video_url(client, session_token, item_id).await {
-                            Ok(Some(hq_url)) => {
-                                tracing::info!(task_id, "Got HQ video URL");
-                                return Ok(hq_url);
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::warn!(task_id, error = %e, "Failed to get HQ video URL, using preview");
+        // Process uploaded materials from multipart body
+        let materials = process_materials(
+            client,
+            session_token,
+            task_meta.request_body.as_deref(),
+            task_meta.request_content_type.as_deref(),
+        ).await;
+
+        // Submit task via browser proxy (a_bogus signing)
+        tracing::info!(task_id, materials_count = materials.len(), "Submitting Seedance task via browser proxy");
+        let submit_result = submit::submit_seedance_video(
+            client,
+            &state.browser,
+            session_token,
+            &task_meta.prompt,
+            model_name,
+            res.width,
+            res.height,
+            task_meta.duration as u32,
+            &materials,
+        ).await?;
+
+        let history_record_id = submit_result.history_record_id;
+        tracing::info!(task_id, %history_record_id, "Task submitted, starting poll");
+
+        let _ = sqlx::query(
+            "UPDATE tasks SET status = 'polling', history_record_id = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(&history_record_id)
+        .bind(task_id)
+        .execute(&queue.db.pool)
+        .await;
+
+        loop {
+            if is_task_cancelled(queue, task_id).await {
+                anyhow::bail!("Task cancelled");
+            }
+
+            if Instant::now() >= deadline {
+                anyhow::bail!("Polling timed out after {}s", state.config.max_poll_duration_secs);
+            }
+
+            let poll_result = poll::poll_status(client, session_token, &history_record_id).await?;
+
+            // Update queue progress
+            let _ = sqlx::query(
+                "UPDATE tasks SET status = 'polling', queue_position = ?, queue_total = ?, \
+                 queue_eta = ?, updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(poll_result.queue_position)
+            .bind(poll_result.queue_total)
+            .bind(&poll_result.queue_eta)
+            .bind(task_id)
+            .execute(&queue.db.pool)
+            .await;
+
+            if poll_result.status == poll::STATUS_FAILED {
+                let fail_code = poll_result.fail_code.as_deref().unwrap_or("unknown");
+                let fail_msg = poll_result.fail_msg.as_deref().unwrap_or("");
+                anyhow::bail!("{fail_code}: {fail_msg}");
+            }
+
+            // Check for completed task (status=50 or video_url present)
+            if poll_result.status == poll::STATUS_SUCCEEDED || poll_result.video_url.is_some() {
+                if let Some(ref video_url) = poll_result.video_url {
+                    if !video_url.is_empty() {
+                        update_status(queue, task_id, "downloading").await;
+
+                        // Try to get high-quality URL
+                        if let Some(ref item_id) = poll_result.item_id {
+                            match poll::fetch_hq_video_url(client, session_token, item_id).await {
+                                Ok(Some(hq_url)) => {
+                                    tracing::info!(task_id, "Got HQ video URL");
+                                    return Ok(hq_url);
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    tracing::warn!(task_id, error = %e, "Failed to get HQ video URL, using preview");
+                                }
                             }
                         }
+
+                        return Ok(video_url.clone());
                     }
-
-                    return Ok(video_url.clone());
                 }
+                // status=50 but no video_url yet — keep polling
             }
-            // status=50 but no video_url yet — keep polling
-        }
 
-        if poll_result.status != poll::STATUS_PENDING && poll_result.status != poll::STATUS_SUCCEEDED {
-            anyhow::bail!("Unexpected status {} without video_url", poll_result.status);
-        }
+            if poll_result.status != poll::STATUS_PENDING && poll_result.status != poll::STATUS_SUCCEEDED {
+                anyhow::bail!("Unexpected status {} without video_url", poll_result.status);
+            }
 
-        tokio::time::sleep(poll_interval).await;
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 }
 
@@ -264,18 +345,50 @@ async fn update_status(queue: &TaskQueue, task_id: &str, status: &str) {
 
 fn classify_error(msg: &str) -> &'static str {
     let msg_lower = msg.to_lowercase();
-    if msg_lower.contains("authorization") || msg_lower.contains("unauthorized") || msg_lower.contains("login") || msg_lower.contains("token") {
-        "auth"
-    } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
-        "timeout"
-    } else if msg_lower.contains("inputtextrisk") || msg_lower.contains("inputimagerisk")
+
+    // Content risk: fail_starling_key patterns from jimeng frontend i18n
+    if msg_lower.contains("violates_community_guidelines")
+        || msg_lower.contains("violate_guidelines")
+        || msg_lower.contains("sensitive_text")
+        || msg_lower.contains("fail2generate_input")
+        || msg_lower.contains("inputtextrisk") || msg_lower.contains("inputimagerisk")
         || msg_lower.contains("outputimagerisk") || msg_lower.contains("outputvideorisk")
+        || msg_lower.contains("content_violation")
         || msg_lower.contains("平台规则") || msg_lower.contains("内容违规")
+        || msg_lower.contains("不符合") || msg_lower.contains("未通过审核")
+        || msg_lower.contains("不合适内容")
         || msg.contains("2038") || msg.contains("2039") || msg.contains("2040")
     {
         "content_risk"
-    } else if msg.contains("100402") {
+    // Account blocked/banned
+    } else if msg_lower.contains("account_block")
+        || msg_lower.contains("risk_notification")
+        || msg_lower.contains("risk_control")
+        || msg_lower.contains("账号已被封禁") || msg_lower.contains("异常行为")
+        || msg_lower.contains("风控失败")
+    {
+        "account_blocked"
+    // Auth errors
+    } else if msg_lower.contains("authorization") || msg_lower.contains("unauthorized")
+        || msg_lower.contains("login") || msg_lower.contains("token")
+    {
+        "auth"
+    // Rate limit / quota
+    } else if msg_lower.contains("daily_usage_limit")
+        || msg_lower.contains("每日使用上限")
+        || msg_lower.contains("积分不足")
+    {
+        "quota"
+    // Timeout
+    } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
+        "timeout"
+    // Generation failed (generic)
+    } else if msg.contains("100402")
+        || msg_lower.contains("generation_failed")
+        || msg_lower.contains("生成失败")
+    {
         "generation_failed"
+    // Network
     } else if msg_lower.contains("network") || msg_lower.contains("econnrefused") {
         "network"
     } else {
@@ -294,6 +407,7 @@ struct TaskMetaRow {
     duration: i32,
     ratio: String,
     model: String,
+    resolution: Option<String>,
     request_body: Option<Vec<u8>>,
     request_content_type: Option<String>,
 }

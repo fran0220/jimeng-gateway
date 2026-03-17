@@ -119,6 +119,7 @@ impl Database {
             "ALTER TABLE tasks ADD COLUMN request_content_type TEXT",
             "ALTER TABLE tasks ADD COLUMN api_key_id TEXT",
             "ALTER TABLE api_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE tasks ADD COLUMN resolution TEXT",
         ];
         for sql in &alter_columns {
             if let Err(err) = sqlx::query(sql).execute(&self.pool).await {
