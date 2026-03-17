@@ -65,7 +65,7 @@ curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
   }'
 ```
 
-**Request (extended control):**
+**Request (extended control — ratio + resolution):**
 
 ```bash
 curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
@@ -78,6 +78,31 @@ curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
     "resolution": "2k"
   }'
 ```
+
+**Request (image-to-image with reference image — multipart):**
+
+```bash
+curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'prompt=把这只猫放到下雪的街道上，保持猫的样子不变' \
+  -F 'model=jimeng-5.0' \
+  -F 'ratio=1:1' \
+  -F 'resolution=2k' \
+  -F 'files=@/path/to/reference.png'
+```
+
+**Request (multiple reference images):**
+
+```bash
+curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'prompt=把第一张图中的人物放到第二张图的场景中' \
+  -F 'model=jimeng-5.0' \
+  -F 'files=@/path/to/character.png' \
+  -F 'files=@/path/to/background.jpg'
+```
+
+> When reference images are uploaded, the gateway automatically switches to **blend mode** (image-to-image). The generated images will incorporate the visual elements from reference images while following the prompt description. Subject appearance, pose, and key features are preserved.
 
 **Response (OpenAI format, HTTP 200):**
 
@@ -104,8 +129,22 @@ curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
 | `size` | string | No | — | OpenAI format: `"WIDTHxHEIGHT"` (e.g. `"1024x1024"`) |
 | `ratio` | string | No | `1:1` | Aspect ratio (overrides `size`) |
 | `resolution` | string | No | `2k` | Resolution tier: `1k`, `2k`, `4k` (overrides `size`) |
+| `files` | file[] | No | — | Reference images for blend mode (multipart only) |
 
 > `ratio` + `resolution` take priority over `size` when both are provided.
+
+### Generation Modes
+
+| Mode | Trigger | Use case |
+|------|---------|----------|
+| **Text-to-image** | No files uploaded | Generate from prompt only |
+| **Image-to-image (blend)** | One or more `files` uploaded | Transform/remix reference images with prompt guidance |
+
+**Blend mode behavior:**
+- Preserves visual elements (subject appearance, pose, features) from reference images
+- Applies prompt-described transformations (scene change, style transfer, etc.)
+- Supports multiple reference images (e.g. combine character from one image with scene from another)
+- Automatically switches mode when files are detected — no extra parameters needed
 
 ### Supported Sizes
 
@@ -142,7 +181,9 @@ curl -X POST 'http://185.200.65.233:5100/v1/images/generations' \
 | 500 | `server_error` | Internal error |
 | 504 | `timeout_error` | Generation timed out |
 
-### Python Example (OpenAI SDK compatible)
+### Python Examples
+
+**Text-to-image (OpenAI SDK):**
 
 ```python
 from openai import OpenAI
@@ -160,6 +201,30 @@ response = client.images.generate(
 
 for img in response.data:
     print(img.url)
+```
+
+**Image-to-image with reference (requests):**
+
+```python
+import requests
+
+BASE = "http://185.200.65.233:5100"
+KEY = "gw_xxx"
+
+response = requests.post(
+    f"{BASE}/v1/images/generations",
+    headers={"Authorization": f"Bearer {KEY}"},
+    files=[("files", ("ref.png", open("reference.png", "rb"), "image/png"))],
+    data={
+        "prompt": "把这只猫放到雪景中，保持猫的样子不变",
+        "model": "jimeng-5.0",
+        "ratio": "1:1",
+        "resolution": "2k",
+    },
+)
+
+for img in response.json()["data"]:
+    print(img["url"])
 ```
 
 ---
