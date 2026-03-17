@@ -216,16 +216,7 @@ async fn execute_task(
                 return Ok(poll_result.image_urls.join(","));
             }
 
-            if poll_result.status == poll::STATUS_SUCCEEDED {
-                if !poll_result.image_urls.is_empty() {
-                    return Ok(poll_result.image_urls.join(","));
-                }
-                // status=50 but no image_urls yet — keep polling briefly
-            }
-
-            if poll_result.status != poll::STATUS_PENDING && poll_result.status != poll::STATUS_SUCCEEDED {
-                anyhow::bail!("Unexpected status {} without image URLs", poll_result.status);
-            }
+            // Any non-failed status without images yet: keep polling
 
             tokio::time::sleep(poll_interval).await;
         }
