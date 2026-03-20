@@ -101,6 +101,17 @@ async fn main() -> anyhow::Result<()> {
             .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
     );
 
+    // Spawn browser idle session cleanup task (every 5 minutes)
+    let browser_cleanup_state = state.clone();
+    let browser_cleanup_task = tokio::task::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+        interval.tick().await; // skip the first immediate tick
+        loop {
+            interval.tick().await;
+            browser_cleanup_state.browser.cleanup_idle_sessions().await;
+        }
+    });
+
     // Build router
     // Auth routes (login/callback/me/logout) — always accessible
     let auth_router = routes::auth_routes::router(state.clone());
@@ -142,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     deletion_task.abort();
+    browser_cleanup_task.abort();
 
     Ok(())
 }

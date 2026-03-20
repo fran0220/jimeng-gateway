@@ -13,8 +13,15 @@ use tokio::sync::RwLock;
 
 use super::auth;
 
-/// Session idle timeout (10 minutes).
-const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Default session idle timeout (30 minutes).
+/// Override via BROWSER_SESSION_IDLE_SECS environment variable.
+fn session_idle_timeout() -> Duration {
+    let secs: u64 = std::env::var("BROWSER_SESSION_IDLE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1800); // 30 minutes default
+    Duration::from_secs(secs)
+}
 
 /// Timeout for waiting for bdms SDK to be ready.
 const BDMS_READY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -217,17 +224,36 @@ impl BrowserService {
     }
 
     /// Clean up idle sessions (call periodically).
+    /// Closes Pages that haven't been used within the configured idle timeout.
     pub async fn cleanup_idle_sessions(&self) {
+        let idle_timeout = session_idle_timeout();
         let mut sessions = self.sessions.write().await;
         let now = Instant::now();
+        let mut closed = 0u32;
         sessions.retain(|token, session| {
-            if now.duration_since(session.last_used) > SESSION_IDLE_TIMEOUT {
-                tracing::info!("BrowserService: cleaning up idle session {}...", &token[..token.len().min(8)]);
+            if now.duration_since(session.last_used) > idle_timeout {
+                tracing::info!(
+                    "BrowserService: closing idle session {}... (idle for {:?})",
+                    &token[..token.len().min(8)],
+                    now.duration_since(session.last_used)
+                );
+                // Page::drop will close the CDP target automatically.
+                closed += 1;
                 false
             } else {
                 true
             }
         });
+        if closed > 0 {
+            tracing::info!("BrowserService: cleaned up {closed} idle session(s), {remaining} remaining",
+                remaining = sessions.len());
+        }
+    }
+
+    /// Return the number of active sessions and idle timeout for diagnostics.
+    pub async fn session_stats(&self) -> (usize, Duration) {
+        let sessions = self.sessions.read().await;
+        (sessions.len(), session_idle_timeout())
     }
 
     /// Shut down browser and all sessions.
