@@ -8,6 +8,8 @@ pub fn model_map() -> HashMap<&'static str, &'static str> {
         ("seedance-2.0", "dreamina_seedance_40_pro"),
         ("seedance-2.0-pro", "dreamina_seedance_40_pro"),
         ("seedance-2.0-fast", "dreamina_seedance_40"),
+        ("seedance-2.0-lite", "seedance_2_0_lite"),
+        ("seedance-1-lite", "seedance_2_0_lite"),
     ])
 }
 
@@ -25,6 +27,7 @@ pub fn seedance_benefit_type(model: &str) -> &'static str {
     match model {
         "seedance-2.0" | "seedance-2.0-pro" => "dreamina_video_seedance_20_pro",
         "seedance-2.0-fast" => "dreamina_seedance_20_fast",
+        "seedance-2.0-lite" | "seedance-1-lite" => "seedance_2_0_lite",
         _ => "dreamina_video_seedance_20_pro",
     }
 }

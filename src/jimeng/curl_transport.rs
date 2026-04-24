@@ -63,8 +63,7 @@ pub async fn post_json_via_curl(
         .wait_with_output()
         .await?;
 
-    // Keep temp file for debugging (TODO: remove in production)
-    // let _ = tokio::fs::remove_file(&body_file).await;
+    let _ = tokio::fs::remove_file(&body_file).await;
 
     if !output.status.success() && output.stdout.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
