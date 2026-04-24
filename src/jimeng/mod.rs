@@ -1,6 +1,7 @@
 //! Direct connection to jimeng.jianying.com API.
 //! Replaces the Node.js jimeng-free-api-all upstream dependency.
 
+pub mod abogus;
 pub mod auth;
 pub mod browser;
 pub mod models;

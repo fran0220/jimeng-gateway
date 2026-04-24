@@ -109,6 +109,23 @@ impl Database {
                 UNIQUE(api_key_id, date)
             );
             CREATE INDEX IF NOT EXISTS idx_usage_daily_key_date ON usage_daily(api_key_id, date);
+
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL UNIQUE,
+                webhook_url TEXT NOT NULL,
+                webhook_secret TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_attempt_at TEXT,
+                last_status_code INTEGER,
+                last_error TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_due ON webhook_deliveries(status, next_attempt_at);
             "#,
         )
         .execute(&self.pool)
@@ -120,6 +137,9 @@ impl Database {
             "ALTER TABLE tasks ADD COLUMN api_key_id TEXT",
             "ALTER TABLE api_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE tasks ADD COLUMN resolution TEXT",
+            "ALTER TABLE tasks ADD COLUMN webhook_url TEXT",
+            "ALTER TABLE tasks ADD COLUMN webhook_secret TEXT",
+            "ALTER TABLE sessions ADD COLUMN cookie_jar TEXT",
         ];
         for sql in &alter_columns {
             if let Err(err) = sqlx::query(sql).execute(&self.pool).await {
@@ -149,6 +169,17 @@ impl Database {
         .execute(&self.pool)
         .await?;
         tracing::info!(rows = requeued.rows_affected(), "Requeued stuck tasks on startup");
+
+        // Reset stale webhook deliveries stuck in 'sending'
+        let reset_webhooks = sqlx::query(
+            "UPDATE webhook_deliveries SET status = 'pending', updated_at = datetime('now') \
+             WHERE status = 'sending'"
+        )
+        .execute(&self.pool)
+        .await?;
+        if reset_webhooks.rows_affected() > 0 {
+            tracing::info!(rows = reset_webhooks.rows_affected(), "Reset stale webhook deliveries on startup");
+        }
 
         Ok(())
     }

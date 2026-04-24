@@ -55,6 +55,7 @@ hex = "0.4"
 dashmap = "6"
 rand = "0.9"
 urlencoding = "2"
+sm3 = "0.5.0"
 
 [profile.release]
 opt-level = 3

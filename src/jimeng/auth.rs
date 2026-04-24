@@ -55,6 +55,54 @@ pub fn compute_sign(uri: &str, timestamp: u64) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Generate the Cookie header value, using a full cookie jar if provided.
+///
+/// If `cookie_jar` is `Some` and non-empty, it is used verbatim (it already
+/// contains `sessionid` and all other cookies). Otherwise falls back to the
+/// minimal fake cookies built from `session_token`.
+pub fn generate_cookie_with_jar(session_token: &str, cookie_jar: Option<&str>) -> String {
+    match cookie_jar {
+        Some(jar) if !jar.is_empty() => jar.to_string(),
+        _ => generate_cookie(session_token),
+    }
+}
+
+/// Build headers using the full cookie jar (if available) and an extra `tdid` header.
+pub fn build_headers_with_cookies(session_token: &str, uri: &str, cookie_jar: Option<&str>) -> HeaderMap {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let sign = compute_sign(uri, timestamp);
+    let cookie = generate_cookie_with_jar(session_token, cookie_jar);
+
+    let mut headers = HeaderMap::new();
+    headers.insert("Accept", HeaderValue::from_static("application/json, text/plain, */*"));
+    headers.insert("Accept-Encoding", HeaderValue::from_static("gzip, deflate, br, zstd"));
+    headers.insert("Accept-Language", HeaderValue::from_static("zh-CN,zh;q=0.9"));
+    headers.insert("App-Sdk-Version", HeaderValue::from_static("48.0.0"));
+    headers.insert("Cache-Control", HeaderValue::from_static("no-cache"));
+    headers.insert("Appid", HeaderValue::from_str(&DEFAULT_ASSISTANT_ID.to_string()).unwrap());
+    headers.insert("Appvr", HeaderValue::from_static(VERSION_CODE));
+    headers.insert("Lan", HeaderValue::from_static("zh-Hans"));
+    headers.insert("Loc", HeaderValue::from_static("cn"));
+    headers.insert("Origin", HeaderValue::from_static("https://jimeng.jianying.com"));
+    headers.insert("Pragma", HeaderValue::from_static("no-cache"));
+    headers.insert("Referer", HeaderValue::from_static("https://jimeng.jianying.com"));
+    headers.insert("Pf", HeaderValue::from_static(PLATFORM_CODE));
+    headers.insert("User-Agent", HeaderValue::from_static(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+    ));
+    headers.insert("Cookie", HeaderValue::from_str(&cookie).unwrap());
+    headers.insert("Device-Time", HeaderValue::from_str(&timestamp.to_string()).unwrap());
+    headers.insert("Sign", HeaderValue::from_str(&sign).unwrap());
+    headers.insert("Sign-Ver", HeaderValue::from_static("1"));
+    headers.insert("tdid", HeaderValue::from_static(""));
+
+    headers
+}
+
 /// Build the full set of fake browser headers for a jimeng API request.
 pub fn build_headers(session_token: &str, uri: &str) -> HeaderMap {
     let timestamp = std::time::SystemTime::now()
@@ -97,8 +145,10 @@ pub fn standard_query_params() -> Vec<(&'static str, String)> {
         ("device_platform", "web".to_string()),
         ("region", "cn".to_string()),
         ("webId", WEB_ID.to_string()),
-        ("da_version", "3.3.2".to_string()),
+        ("da_version", "3.3.14".to_string()),
+        ("os", "mac".to_string()),
         ("web_component_open_flag", "1".to_string()),
+        ("commerce_with_input_video", "1".to_string()),
         ("web_version", "7.5.0".to_string()),
         ("aigc_features", "app_lip_sync".to_string()),
     ]

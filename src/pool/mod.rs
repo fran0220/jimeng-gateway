@@ -27,7 +27,7 @@ impl SessionPool {
     pub async fn load_sessions(&self) -> Result<()> {
         let rows = sqlx::query_as::<_, SessionInfo>(
             "SELECT id, label, session_id, enabled, healthy, active_tasks, total_tasks, \
-             success_count, fail_count, last_used_at, last_error, created_at, updated_at \
+             success_count, fail_count, last_used_at, last_error, cookie_jar, created_at, updated_at \
              FROM sessions ORDER BY created_at"
         )
         .fetch_all(&self.db.pool)
@@ -48,7 +48,7 @@ impl SessionPool {
              WHERE id = (SELECT id FROM sessions WHERE enabled=1 AND healthy=1 AND active_tasks < 2 \
                          ORDER BY last_used_at LIMIT 1) \
              RETURNING id, label, session_id, enabled, healthy, active_tasks, total_tasks, \
-                       success_count, fail_count, last_used_at, last_error, created_at, updated_at",
+                       success_count, fail_count, last_used_at, last_error, cookie_jar, created_at, updated_at",
         )
         .fetch_optional(&self.db.pool)
         .await
@@ -119,14 +119,15 @@ impl SessionPool {
     }
 
     /// Add a new session.
-    pub async fn add_session(&self, label: &str, jimeng_session_id: &str) -> Result<SessionInfo> {
+    pub async fn add_session(&self, label: &str, jimeng_session_id: &str, cookie_jar: Option<&str>) -> Result<SessionInfo> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO sessions (id, label, session_id) VALUES (?, ?, ?)",
+            "INSERT INTO sessions (id, label, session_id, cookie_jar) VALUES (?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(label)
         .bind(jimeng_session_id)
+        .bind(cookie_jar)
         .execute(&self.db.pool)
         .await?;
 
@@ -142,6 +143,7 @@ impl SessionPool {
             fail_count: 0,
             last_used_at: None,
             last_error: None,
+            cookie_jar: cookie_jar.map(|s| s.to_string()),
             created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             updated_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         };
@@ -180,6 +182,23 @@ impl SessionPool {
             if enabled {
                 s.healthy = true;
             }
+        }
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update cookie jar for an existing session.
+    pub async fn update_cookie_jar(&self, id: &str, cookie_jar: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE sessions SET cookie_jar = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(cookie_jar)
+        .bind(id)
+        .execute(&self.db.pool)
+        .await?;
+
+        let mut sessions = self.sessions.write().await;
+        if let Some(s) = sessions.iter_mut().find(|s| s.id == id) {
+            s.cookie_jar = Some(cookie_jar.to_string());
         }
         Ok(result.rows_affected() > 0)
     }

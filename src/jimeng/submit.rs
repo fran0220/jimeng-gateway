@@ -1,9 +1,11 @@
 //! Task submission to jimeng.jianying.com API.
-//! Regular videos use plain HTTP; Seedance models use browser proxy for a_bogus signing.
+//! Seedance models use pure Rust a_bogus signing with browser fallback.
+//! Image models use plain HTTP (no a_bogus needed).
 
 use anyhow::{bail, Result};
 use reqwest::Client;
 
+use super::abogus;
 use super::auth;
 use super::models::{self, UploadedMaterial, MaterialType};
 use super::browser::BrowserService;
@@ -16,9 +18,10 @@ pub struct SubmitResult {
     pub history_record_id: String,
 }
 
-/// Submit a Seedance video generation task via browser proxy.
+/// Submit a Seedance video generation task.
+/// Tries pure Rust a_bogus signing first; falls back to browser proxy on failure.
 pub async fn submit_seedance_video(
-    _client: &Client,
+    client: &Client,
     browser: &BrowserService,
     session_token: &str,
     prompt: &str,
@@ -27,6 +30,7 @@ pub async fn submit_seedance_video(
     height: u32,
     duration: u32,
     materials: &[UploadedMaterial],
+    cookie_jar: Option<&str>,
 ) -> Result<SubmitResult> {
     let internal_model = models::resolve_model(model_name);
     let benefit_type = models::seedance_benefit_type(model_name);
@@ -189,25 +193,64 @@ pub async fn submit_seedance_video(
         },
     });
 
-    // Build the full URL with query params
-    let params: Vec<(String, String)> = vec![
-        ("aid".into(), auth::DEFAULT_ASSISTANT_ID.to_string()),
-        ("device_platform".into(), "web".into()),
-        ("region".into(), "cn".into()),
-        ("webId".into(), auth::standard_query_params().iter().find(|(k,_)| *k == "webId").map(|(_,v)| v.clone()).unwrap_or_default()),
-        ("da_version".into(), draft_version.into()),
-        ("web_component_open_flag".into(), "1".into()),
-        ("web_version".into(), "7.5.0".into()),
-        ("aigc_features".into(), "app_lip_sync".into()),
-    ];
-    let query_string = params.iter()
+    // Build the full URL with query params (match browser's params exactly)
+    let std_params = auth::standard_query_params();
+    let query_string = std_params.iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("&");
-    let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
 
-    // Send through browser proxy (for a_bogus injection)
-    let result = browser.fetch(session_token, &url, &body.to_string()).await?;
+    let body_str = body.to_string();
+
+    // Try pure Rust a_bogus signing first
+    let use_browser = std::env::var("ABOGUS_MODE")
+        .map(|v| v == "browser")
+        .unwrap_or(false);
+
+    let result = if use_browser {
+        // Browser fallback mode
+        let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
+        tracing::info!("Seedance: submitting via browser proxy");
+        browser.fetch(session_token, &url, &body_str).await?
+    } else {
+        // Pure Rust a_bogus signing
+        let a_bogus = abogus::generate(&query_string, "POST");
+        let url = format!(
+            "{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}&a_bogus={a_bogus}"
+        );
+        let uri = "/mweb/v1/aigc_draft/generate";
+        let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
+
+        tracing::info!("Seedance: submitting via pure Rust a_bogus signing");
+
+        let resp = client
+            .post(&url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await;
+
+        match resp {
+            Ok(resp) => {
+                let status_code = resp.status();
+                let text = resp.text().await?;
+                if !status_code.is_success() {
+                    tracing::warn!(
+                        "Seedance pure Rust a_bogus got HTTP {status_code}, falling back to browser"
+                    );
+                    let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
+                    browser.fetch(session_token, &url, &body_str).await?
+                } else {
+                    text
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Seedance pure Rust a_bogus request failed: {e}, falling back to browser");
+                let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
+                browser.fetch(session_token, &url, &body_str).await?
+            }
+        }
+    };
 
     // Parse response
     let payload: serde_json::Value = serde_json::from_str(&result)
@@ -253,6 +296,7 @@ pub async fn submit_image_generation(
     sample_strength: f64,
     negative_prompt: &str,
     reference_image_uris: &[String],
+    cookie_jar: Option<&str>,
 ) -> Result<SubmitResult> {
     let internal_model = models::resolve_image_model(model_name);
     let is_blend = !reference_image_uris.is_empty();
@@ -424,18 +468,8 @@ pub async fn submit_image_generation(
     });
 
     let uri = "/mweb/v1/aigc_draft/generate";
-    let headers = auth::build_headers(session_token, uri);
-
-    let params: Vec<(&str, String)> = vec![
-        ("aid", auth::DEFAULT_ASSISTANT_ID.to_string()),
-        ("device_platform", "web".to_string()),
-        ("region", "cn".to_string()),
-        ("webId", auth::standard_query_params().iter().find(|(k,_)| *k == "webId").map(|(_,v)| v.clone()).unwrap_or_default()),
-        ("da_version", draft_version.to_string()),
-        ("web_component_open_flag", "1".to_string()),
-        ("web_version", "7.5.0".to_string()),
-        ("aigc_features", "app_lip_sync".to_string()),
-    ];
+    let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
+    let params = auth::standard_query_params();
 
     let resp = client.post(format!("{JIMENG_BASE}{uri}"))
         .headers(headers)

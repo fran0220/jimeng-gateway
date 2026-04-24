@@ -75,7 +75,10 @@ pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
 
         tracing::info!(task_id, session_id = session.id, "Processing task");
 
-        let result = execute_task(&queue, &state, &client, &task_id, &session.session_id).await;
+        let result = execute_task(
+            &queue, &state, &client, &task_id,
+            &session.session_id, session.cookie_jar.as_deref(),
+        ).await;
 
         *queue.running.write().await -= 1;
 
@@ -95,6 +98,7 @@ pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
 
                 let _ = queue.pool.release_session(&session.id, true, None).await;
                 tracing::info!(task_id, "Task succeeded");
+                crate::webhook::enqueue_delivery(&queue.db.pool, &task_id).await;
             }
             Err(e) => {
                 if is_task_cancelled(&queue, &task_id).await {
@@ -126,6 +130,7 @@ pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
                 }
 
                 tracing::error!(task_id, error = %e, "Task failed");
+                crate::webhook::enqueue_delivery(&queue.db.pool, &task_id).await;
             }
         }
     }
@@ -138,6 +143,7 @@ async fn execute_task(
     client: &Client,
     task_id: &str,
     session_token: &str,
+    cookie_jar: Option<&str>,
 ) -> Result<String> {
     let task_meta = sqlx::query_as::<_, TaskMetaRow>(
         "SELECT prompt, duration, ratio, model, resolution, request_body, request_content_type FROM tasks WHERE id = ?",
@@ -185,6 +191,7 @@ async fn execute_task(
             0.5,
             "",
             &reference_uris,
+            cookie_jar,
         ).await?;
 
         let history_record_id = submit_result.history_record_id;
@@ -206,7 +213,7 @@ async fn execute_task(
                 anyhow::bail!("Polling timed out after {}s", state.config.max_poll_duration_secs);
             }
 
-            let poll_result = poll::poll_status(client, session_token, &history_record_id).await?;
+            let poll_result = poll::poll_status(client, session_token, &history_record_id, cookie_jar).await?;
 
             let _ = sqlx::query(
                 "UPDATE tasks SET status = 'polling', queue_position = ?, queue_total = ?, \
@@ -260,6 +267,7 @@ async fn execute_task(
             res.height,
             task_meta.duration as u32,
             &materials,
+            cookie_jar,
         ).await?;
 
         let history_record_id = submit_result.history_record_id;
@@ -282,7 +290,7 @@ async fn execute_task(
                 anyhow::bail!("Polling timed out after {}s", state.config.max_poll_duration_secs);
             }
 
-            let poll_result = poll::poll_status(client, session_token, &history_record_id).await?;
+            let poll_result = poll::poll_status(client, session_token, &history_record_id, cookie_jar).await?;
 
             // Update queue progress
             let _ = sqlx::query(
@@ -310,7 +318,7 @@ async fn execute_task(
 
                         // Try to get high-quality URL
                         if let Some(ref item_id) = poll_result.item_id {
-                            match poll::fetch_hq_video_url(client, session_token, item_id).await {
+                            match poll::fetch_hq_video_url(client, session_token, item_id, cookie_jar).await {
                                 Ok(Some(hq_url)) => {
                                     tracing::info!(task_id, "Got HQ video URL");
                                     return Ok(hq_url);

@@ -60,9 +60,9 @@ async fn compat_video_generations(
         .unwrap_or("");
 
     // Extract fields from multipart or JSON body
-    let (prompt, model, duration, ratio) = if content_type.contains("multipart") {
+    let (prompt, model, duration, ratio, webhook_url) = if content_type.contains("multipart") {
         let f = extract_multipart_fields(content_type, &body);
-        (f.prompt, f.model, f.duration, f.ratio)
+        (f.prompt, f.model, f.duration, f.ratio, f.webhook_url)
     } else {
         // Try JSON
         match serde_json::from_slice::<serde_json::Value>(&body) {
@@ -71,8 +71,9 @@ async fn compat_video_generations(
                 v.get("model").and_then(|v| v.as_str()).map(String::from),
                 v.get("duration").and_then(|v| v.as_i64()).map(|v| v as i32),
                 v.get("ratio").and_then(|v| v.as_str()).map(String::from),
+                v.get("webhook_url").and_then(|v| v.as_str()).map(String::from),
             ),
-            Err(_) => ("".to_string(), None, None, None),
+            Err(_) => ("".to_string(), None, None, None, None),
         }
     };
 
@@ -83,6 +84,8 @@ async fn compat_video_generations(
         model,
         resolution: None,
         files: None,
+        webhook_url,
+        webhook_secret: None,
     };
 
     let task = state
@@ -128,6 +131,7 @@ struct MultipartFields {
     duration: Option<i32>,
     ratio: Option<String>,
     resolution: Option<String>,
+    webhook_url: Option<String>,
 }
 
 /// Parse multipart form data to extract text fields.
@@ -139,7 +143,7 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> MultipartFields 
         .trim();
 
     if boundary.is_empty() {
-        return MultipartFields { prompt: String::new(), model: None, duration: None, ratio: None, resolution: None };
+        return MultipartFields { prompt: String::new(), model: None, duration: None, ratio: None, resolution: None, webhook_url: None };
     }
 
     let body_str = String::from_utf8_lossy(body);
@@ -149,6 +153,7 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> MultipartFields 
         duration: None,
         ratio: None,
         resolution: None,
+        webhook_url: None,
     };
 
     // Simple multipart parser for text fields
@@ -172,6 +177,7 @@ fn extract_multipart_fields(content_type: &str, body: &[u8]) -> MultipartFields 
                         "duration" => fields.duration = value.parse().ok(),
                         "ratio" => fields.ratio = Some(value.to_string()),
                         "resolution" => fields.resolution = Some(value.to_string()),
+                        "webhook_url" => fields.webhook_url = Some(value.to_string()),
                         _ => {}
                     }
                 }
@@ -270,9 +276,9 @@ async fn compat_image_generations(
         .unwrap_or("");
 
     // Parse request fields
-    let (prompt, model, mut ratio, mut resolution) = if content_type.contains("multipart") {
+    let (prompt, model, mut ratio, mut resolution, webhook_url) = if content_type.contains("multipart") {
         let f = extract_multipart_fields(content_type, &body);
-        (f.prompt, f.model, f.ratio, f.resolution)
+        (f.prompt, f.model, f.ratio, f.resolution, f.webhook_url)
     } else {
         match serde_json::from_slice::<serde_json::Value>(&body) {
             Ok(v) => {
@@ -293,9 +299,10 @@ async fn compat_image_generations(
                     v.get("model").and_then(|v| v.as_str()).map(String::from),
                     v.get("ratio").and_then(|v| v.as_str()).map(String::from).or(size_ratio),
                     v.get("resolution").and_then(|v| v.as_str()).map(String::from).or(size_resolution),
+                    v.get("webhook_url").and_then(|v| v.as_str()).map(String::from),
                 )
             }
-            Err(_) => ("".to_string(), None, None, None),
+            Err(_) => ("".to_string(), None, None, None, None),
         }
     };
 
@@ -330,6 +337,8 @@ async fn compat_image_generations(
         model: model.or_else(|| Some("jimeng-5.0".to_string())),
         resolution,
         files: None,
+        webhook_url,
+        webhook_secret: None,
     };
 
     let task = state

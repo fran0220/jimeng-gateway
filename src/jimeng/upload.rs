@@ -123,7 +123,7 @@ async fn get_upload_token(
     scene: u32,
 ) -> Result<serde_json::Value> {
     let uri = "/mweb/v1/get_upload_token";
-    let headers = auth::build_headers(session_token, uri);
+    let headers = auth::build_headers_with_cookies(session_token, uri, None);
     let params = auth::standard_query_params();
 
     let resp = client

@@ -73,6 +73,8 @@ pub struct CreateTaskRequest {
     pub resolution: Option<String>,
     /// Base64-encoded files or file URLs.
     pub files: Option<Vec<FileInput>>,
+    pub webhook_url: Option<String>,
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,8 +122,8 @@ impl TaskQueue {
         let resolution = req.resolution;
 
         sqlx::query(
-            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, resolution, request_body, request_content_type, created_at, updated_at) \
-             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, status, model, prompt, duration, ratio, resolution, request_body, request_content_type, webhook_url, webhook_secret, created_at, updated_at) \
+             VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&model)
@@ -131,6 +133,8 @@ impl TaskQueue {
         .bind(&resolution)
         .bind(&request_body)
         .bind(&request_content_type)
+        .bind(&req.webhook_url)
+        .bind(&req.webhook_secret)
         .bind(&now)
         .bind(&now)
         .execute(&self.db.pool)
@@ -244,6 +248,8 @@ impl TaskQueue {
             model: Some(src.model),
             resolution: src.resolution,
             files: None,
+            webhook_url: None,
+            webhook_secret: None,
         };
 
         let task = self

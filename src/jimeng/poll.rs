@@ -31,9 +31,10 @@ pub async fn poll_status(
     client: &Client,
     session_token: &str,
     history_record_id: &str,
+    cookie_jar: Option<&str>,
 ) -> Result<PollResult> {
     let uri = "/mweb/v1/get_history_by_ids";
-    let headers = auth::build_headers(session_token, uri);
+    let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
     let params = auth::standard_query_params();
 
     let body = serde_json::json!({
@@ -184,9 +185,10 @@ pub async fn fetch_hq_video_url(
     client: &Client,
     session_token: &str,
     item_id: &str,
+    cookie_jar: Option<&str>,
 ) -> Result<Option<String>> {
     let uri = "/mweb/v1/get_local_item_list";
-    let headers = auth::build_headers(session_token, uri);
+    let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
     let params = auth::standard_query_params();
 
     let body = serde_json::json!({

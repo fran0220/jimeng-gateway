@@ -5,6 +5,7 @@ mod jimeng;
 mod pool;
 mod queue;
 mod routes;
+mod webhook;
 
 use std::sync::Arc;
 
@@ -101,15 +102,16 @@ async fn main() -> anyhow::Result<()> {
             .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
     );
 
-    // Spawn browser idle session cleanup task (every 5 minutes)
-    let browser_cleanup_state = state.clone();
-    let browser_cleanup_task = tokio::task::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
-        interval.tick().await; // skip the first immediate tick
-        loop {
-            interval.tick().await;
-            browser_cleanup_state.browser.cleanup_idle_sessions().await;
-        }
+    // Spawn webhook dispatcher
+    let webhook_pool = db.pool.clone();
+    let webhook_task = tokio::task::spawn(async move {
+        webhook::dispatcher_loop(webhook_pool).await;
+    });
+
+    // Spawn periodic cookie refresh (every 2 hours)
+    let cookie_state = state.clone();
+    let cookie_task = tokio::task::spawn(async move {
+        cookie_refresh_loop(cookie_state).await;
     });
 
     // Build router
@@ -153,7 +155,47 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     deletion_task.abort();
-    browser_cleanup_task.abort();
+    webhook_task.abort();
+    cookie_task.abort();
 
     Ok(())
+}
+
+/// Periodically refresh cookie jars for all enabled sessions.
+async fn cookie_refresh_loop(state: Arc<AppState>) {
+    // Wait 30s on startup before first harvest
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+    let interval = tokio::time::Duration::from_secs(2 * 3600); // 2 hours
+    loop {
+        let sessions = state.pool.list_sessions().await;
+        let active: Vec<_> = sessions.iter().filter(|s| s.enabled).collect();
+
+        if active.is_empty() {
+            tokio::time::sleep(interval).await;
+            continue;
+        }
+
+        tracing::info!("CookieRefresh: refreshing cookies for {} sessions", active.len());
+
+        for session in &active {
+            match state.browser.harvest_cookies(&session.session_id).await {
+                Ok(cookie_jar) => {
+                    let count = cookie_jar.split("; ").count();
+                    if let Err(e) = state.pool.update_cookie_jar(&session.id, &cookie_jar).await {
+                        tracing::warn!(session_id = session.id, error = %e, "Failed to save harvested cookies");
+                    } else {
+                        tracing::info!(session_id = session.id, cookies = count, "Cookies refreshed");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(session_id = session.id, error = %e, "Cookie harvest failed");
+                }
+            }
+            // Small delay between sessions to avoid overwhelming the browser
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+
+        tokio::time::sleep(interval).await;
+    }
 }

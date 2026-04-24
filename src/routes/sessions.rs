@@ -14,11 +14,18 @@ use crate::AppState;
 struct AddSessionRequest {
     label: Option<String>,
     session_id: String,
+    /// Full browser cookie jar string (all cookies including HttpOnly).
+    cookie_jar: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ToggleRequest {
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct UpdateCookieJarRequest {
+    cookie_jar: String,
 }
 
 async fn list_sessions(
@@ -43,7 +50,7 @@ async fn add_session(
 
     let session = state
         .pool
-        .add_session(&label, &req.session_id)
+        .add_session(&label, &req.session_id, req.cookie_jar.as_deref())
         .await
         .map_err(|e| {
             (
@@ -105,7 +112,11 @@ async fn test_session(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let client = reqwest::Client::new();
-    let headers = crate::jimeng::auth::build_headers(&session.session_id, "/mweb/v1/get_history_by_ids");
+    let headers = crate::jimeng::auth::build_headers_with_cookies(
+        &session.session_id,
+        "/mweb/v1/get_history_by_ids",
+        session.cookie_jar.as_deref(),
+    );
     let params = crate::jimeng::auth::standard_query_params();
 
     let resp = client
@@ -136,11 +147,63 @@ async fn test_session(
     }
 }
 
+/// Trigger cookie harvesting for a session via headless browser.
+async fn harvest_cookies(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let sessions = state.pool.list_sessions().await;
+    let session = sessions
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "session not found"}))))?;
+
+    let cookie_jar = state.browser.harvest_cookies(&session.session_id).await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Cookie harvest failed: {e}")})),
+        ))?;
+
+    let cookie_count = cookie_jar.split("; ").count();
+
+    state.pool.update_cookie_jar(&id, &cookie_jar).await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ))?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "cookies_harvested": cookie_count,
+        "cookie_jar_length": cookie_jar.len(),
+    })))
+}
+
+async fn update_cookie_jar(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateCookieJarRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let updated = state
+        .pool
+        .update_cookie_jar(&id, &req.cookie_jar)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if updated {
+        Ok(Json(serde_json::json!({ "ok": true })))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/sessions", get(list_sessions).post(add_session))
         .route("/sessions/{id}", delete(remove_session))
         .route("/sessions/{id}", patch(toggle_session))
         .route("/sessions/{id}/test", post(test_session))
+        .route("/sessions/{id}/cookies", patch(update_cookie_jar))
+        .route("/sessions/{id}/harvest", post(harvest_cookies))
         .with_state(state)
 }

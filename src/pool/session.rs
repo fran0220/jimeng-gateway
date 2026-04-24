@@ -16,6 +16,9 @@ pub struct SessionInfo {
     pub fail_count: i32,
     pub last_used_at: Option<String>,
     pub last_error: Option<String>,
+    /// Full browser cookie jar string (all cookies including HttpOnly).
+    /// When present, used instead of constructing minimal cookies from session_id.
+    pub cookie_jar: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
