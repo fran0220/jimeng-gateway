@@ -213,15 +213,22 @@ pub async fn submit_seedance_video(
         tracing::info!("Seedance: submitting via browser proxy");
         browser.fetch(session_token, &url, &body_str).await?
     } else {
-        // Pure Rust a_bogus signing
-        let a_bogus = abogus::generate(&query_string, "POST");
-        let url = format!(
-            "{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}&a_bogus={a_bogus}"
-        );
+        // Direct HTTP with full cookie jar (no a_bogus needed when cookies are complete)
+        let url = if cookie_jar.is_some() {
+            // With full cookie jar, a_bogus is not needed
+            format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}")
+        } else {
+            // Fallback: try pure Rust a_bogus when no cookie jar
+            let a_bogus = abogus::generate(&query_string, "POST");
+            format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}&a_bogus={a_bogus}")
+        };
         let uri = "/mweb/v1/aigc_draft/generate";
         let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
 
-        tracing::info!("Seedance: submitting via pure Rust a_bogus signing");
+        tracing::info!(
+            has_cookie_jar = cookie_jar.is_some(),
+            "Seedance: submitting via direct HTTP"
+        );
 
         let resp = client
             .post(&url)
