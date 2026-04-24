@@ -16,6 +16,10 @@ pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
     let client = Client::builder()
         .timeout(Duration::from_secs(120))
         .no_proxy()
+        // Suppress reqwest's default "reqwest/x.y.z" User-Agent header.
+        // When using a full cookie jar, any UA mismatch triggers ByteDance 4013.
+        // build_headers_with_cookies() sets the appropriate UA per-request.
+        .user_agent("")
         .build()
         .expect("Failed to build HTTP client");
 

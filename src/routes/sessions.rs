@@ -111,7 +111,7 @@ async fn test_session(
         .find(|s| s.id == id)
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().user_agent("").build().unwrap();
     let headers = crate::jimeng::auth::build_headers_with_cookies(
         &session.session_id,
         "/mweb/v1/get_history_by_ids",

@@ -232,6 +232,10 @@ pub async fn submit_seedance_video(
             "Seedance: submitting via direct HTTP"
         );
 
+        // Log all headers for debugging fingerprint issues
+        let header_names: Vec<String> = headers.keys().map(|k| k.to_string()).collect();
+        tracing::debug!(headers = ?header_names, "Seedance request headers");
+
         let resp = client
             .post(&url)
             .headers(headers)
