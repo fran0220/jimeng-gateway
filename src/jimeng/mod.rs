@@ -4,6 +4,7 @@
 pub mod abogus;
 pub mod auth;
 pub mod browser;
+pub mod curl_transport;
 pub mod models;
 pub mod poll;
 pub mod submit;

@@ -7,6 +7,7 @@ use reqwest::Client;
 
 use super::abogus;
 use super::auth;
+use super::curl_transport;
 use super::models::{self, UploadedMaterial, MaterialType};
 use super::browser::BrowserService;
 
@@ -212,29 +213,38 @@ pub async fn submit_seedance_video(
         let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
         tracing::info!("Seedance: submitting via browser proxy");
         browser.fetch(session_token, &url, &body_str).await?
-    } else {
-        // Direct HTTP with full cookie jar (no a_bogus needed when cookies are complete)
-        let url = if cookie_jar.is_some() {
-            // With full cookie jar, a_bogus is not needed
-            format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}")
-        } else {
-            // Fallback: try pure Rust a_bogus when no cookie jar
-            let a_bogus = abogus::generate(&query_string, "POST");
-            format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}&a_bogus={a_bogus}")
-        };
+    } else if cookie_jar.is_some() {
+        // Use curl subprocess when full cookie jar is available.
+        // reqwest's TLS fingerprint (rustls/hyper) differs from Chrome and gets
+        // rejected by ByteDance's JA3/JA4 fingerprinting (4013 risk control).
+        // System curl uses OpenSSL with an accepted fingerprint.
+        let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
         let uri = "/mweb/v1/aigc_draft/generate";
         let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
 
         tracing::info!(
-            has_cookie_jar = cookie_jar.is_some(),
             cookie_jar_len = cookie_jar.map(|s| s.len()).unwrap_or(0),
-            url_len = url.len(),
-            "Seedance: submitting via direct HTTP"
+            "Seedance: submitting via curl transport"
         );
 
-        // Log all headers for debugging fingerprint issues
-        let header_names: Vec<String> = headers.keys().map(|k| k.to_string()).collect();
-        tracing::debug!(headers = ?header_names, "Seedance request headers");
+        let (status_code, text) = curl_transport::post_json_via_curl(&url, &headers, &body_str, 120).await?;
+        tracing::info!(status_code, body_preview = &text[..text.len().min(200)], "Seedance curl response");
+
+        if status_code >= 400 {
+            tracing::warn!(status_code, "Seedance curl got HTTP error, falling back to browser");
+            let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
+            browser.fetch(session_token, &url, &body_str).await?
+        } else {
+            text
+        }
+    } else {
+        // No cookie jar: use reqwest with a_bogus signing
+        let a_bogus = abogus::generate(&query_string, "POST");
+        let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}&a_bogus={a_bogus}");
+        let uri = "/mweb/v1/aigc_draft/generate";
+        let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
+
+        tracing::info!("Seedance: submitting via reqwest with a_bogus");
 
         let resp = client
             .post(&url)
@@ -250,7 +260,7 @@ pub async fn submit_seedance_video(
                 tracing::info!(%status_code, body_preview = &text[..text.len().min(200)], "Seedance submit response");
                 if !status_code.is_success() {
                     tracing::warn!(
-                        "Seedance pure Rust a_bogus got HTTP {status_code}, falling back to browser"
+                        "Seedance a_bogus got HTTP {status_code}, falling back to browser"
                     );
                     let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
                     browser.fetch(session_token, &url, &body_str).await?
@@ -259,7 +269,7 @@ pub async fn submit_seedance_video(
                 }
             }
             Err(e) => {
-                tracing::warn!("Seedance pure Rust a_bogus request failed: {e}, falling back to browser");
+                tracing::warn!("Seedance a_bogus request failed: {e}, falling back to browser");
                 let url = format!("{JIMENG_BASE}/mweb/v1/aigc_draft/generate?{query_string}");
                 browser.fetch(session_token, &url, &body_str).await?
             }
@@ -485,16 +495,28 @@ pub async fn submit_image_generation(
     let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
     let params = auth::standard_query_params();
 
-    let resp = client.post(format!("{JIMENG_BASE}{uri}"))
-        .headers(headers)
-        .query(&params)
-        .json(&body)
-        .send().await?;
+    let (status_code, text) = if cookie_jar.is_some() {
+        // Use curl transport to avoid TLS fingerprint rejection
+        let query_string = params.iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let url = format!("{JIMENG_BASE}{uri}?{query_string}");
+        let body_str = body.to_string();
+        tracing::info!("Image: submitting via curl transport");
+        curl_transport::post_json_via_curl(&url, &headers, &body_str, 120).await?
+    } else {
+        let resp = client.post(format!("{JIMENG_BASE}{uri}"))
+            .headers(headers)
+            .query(&params)
+            .json(&body)
+            .send().await?;
+        let sc = resp.status().as_u16();
+        let text = resp.text().await?;
+        (sc, text)
+    };
 
-    let status_code = resp.status();
-    let text = resp.text().await?;
-
-    if !status_code.is_success() {
+    if status_code >= 400 {
         bail!("Image submit HTTP {status_code}: {}", &text[..text.len().min(500)]);
     }
 

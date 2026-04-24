@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use reqwest::Client;
 
 use super::auth;
+use super::curl_transport;
 
 const JIMENG_BASE: &str = "https://jimeng.jianying.com";
 
@@ -41,16 +42,26 @@ pub async fn poll_status(
         "history_ids": [history_record_id],
     });
 
-    let resp = client.post(format!("{JIMENG_BASE}{uri}"))
-        .headers(headers)
-        .query(&params)
-        .json(&body)
-        .send().await?;
+    let (status_code, text) = if cookie_jar.is_some() {
+        let query_string = params.iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let url = format!("{JIMENG_BASE}{uri}?{query_string}");
+        let body_str = body.to_string();
+        curl_transport::post_json_via_curl(&url, &headers, &body_str, 30).await?
+    } else {
+        let resp = client.post(format!("{JIMENG_BASE}{uri}"))
+            .headers(headers)
+            .query(&params)
+            .json(&body)
+            .send().await?;
+        let sc = resp.status().as_u16();
+        let text = resp.text().await?;
+        (sc, text)
+    };
 
-    let status_code = resp.status();
-    let text = resp.text().await?;
-
-    if !status_code.is_success() {
+    if status_code >= 400 {
         bail!("Poll HTTP {status_code}: {}", &text[..text.len().min(500)]);
     }
 
@@ -197,13 +208,23 @@ pub async fn fetch_hq_video_url(
         "is_for_video_download": true,
     });
 
-    let resp = client.post(format!("{JIMENG_BASE}{uri}"))
-        .headers(headers)
-        .query(&params)
-        .json(&body)
-        .send().await?;
-
-    let text = resp.text().await?;
+    let text = if cookie_jar.is_some() {
+        let query_string = params.iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let url = format!("{JIMENG_BASE}{uri}?{query_string}");
+        let body_str = body.to_string();
+        let (_status, text) = curl_transport::post_json_via_curl(&url, &headers, &body_str, 30).await?;
+        text
+    } else {
+        let resp = client.post(format!("{JIMENG_BASE}{uri}"))
+            .headers(headers)
+            .query(&params)
+            .json(&body)
+            .send().await?;
+        resp.text().await?
+    };
     let data = if let Some(d) = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("data").cloned()) {
         d
     } else {
