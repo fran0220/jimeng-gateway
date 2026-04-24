@@ -18,7 +18,11 @@ pub async fn post_json_via_curl(
     timeout_secs: u64,
 ) -> Result<(u16, String)> {
     // Write body to a temp file (avoids stdin pipe buffering issues)
-    let body_file = format!("/tmp/jimeng_curl_{}.json", std::process::id());
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let body_file = format!("/tmp/jimeng_curl_{}_{}.json", std::process::id(), ts);
     tokio::fs::write(&body_file, body.as_bytes()).await?;
 
     let timeout_str = timeout_secs.to_string();
@@ -48,7 +52,7 @@ pub async fn post_json_via_curl(
     let header_names: Vec<&str> = header_strings.iter()
         .map(|h| h.split(':').next().unwrap_or("?"))
         .collect();
-    tracing::debug!(?header_names, body_len = body.len(), "curl transport request");
+    tracing::debug!(?header_names, body_len = body.len(), %body_file, "curl transport request");
 
     let output = cmd
         .stdout(std::process::Stdio::piped())
@@ -59,8 +63,8 @@ pub async fn post_json_via_curl(
         .wait_with_output()
         .await?;
 
-    // Clean up temp file
-    let _ = tokio::fs::remove_file(&body_file).await;
+    // Keep temp file for debugging (TODO: remove in production)
+    // let _ = tokio::fs::remove_file(&body_file).await;
 
     if !output.status.success() && output.stdout.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
