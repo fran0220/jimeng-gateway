@@ -91,9 +91,13 @@ pub fn build_headers_with_cookies(session_token: &str, uri: &str, cookie_jar: Op
     headers.insert("Pragma", HeaderValue::from_static("no-cache"));
     headers.insert("Referer", HeaderValue::from_static("https://jimeng.jianying.com"));
     headers.insert("Pf", HeaderValue::from_static(PLATFORM_CODE));
-    headers.insert("User-Agent", HeaderValue::from_static(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
-    ));
+    // Don't set User-Agent when using a cookie jar — let reqwest use its default
+    // to avoid UA/cookie fingerprint mismatch that triggers risk control.
+    if cookie_jar.is_none() || cookie_jar.map_or(true, |s| s.is_empty()) {
+        headers.insert("User-Agent", HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+        ));
+    }
     headers.insert("Cookie", HeaderValue::from_str(&cookie).unwrap());
     headers.insert("Device-Time", HeaderValue::from_str(&timestamp.to_string()).unwrap());
     headers.insert("Sign", HeaderValue::from_str(&sign).unwrap());
