@@ -227,6 +227,8 @@ pub async fn submit_seedance_video(
 
         tracing::info!(
             has_cookie_jar = cookie_jar.is_some(),
+            cookie_jar_len = cookie_jar.map(|s| s.len()).unwrap_or(0),
+            url_len = url.len(),
             "Seedance: submitting via direct HTTP"
         );
 
@@ -241,6 +243,7 @@ pub async fn submit_seedance_video(
             Ok(resp) => {
                 let status_code = resp.status();
                 let text = resp.text().await?;
+                tracing::info!(%status_code, body_preview = &text[..text.len().min(200)], "Seedance submit response");
                 if !status_code.is_success() {
                     tracing::warn!(
                         "Seedance pure Rust a_bogus got HTTP {status_code}, falling back to browser"
