@@ -6,33 +6,22 @@
 
 use anyhow::{bail, Result};
 use reqwest::header::HeaderMap;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 /// POST JSON to a URL via system curl, returning (status_code, response_body).
 ///
-/// Body is piped via stdin to avoid shell escaping issues.
+/// Body is written to a temp file to avoid stdin piping issues.
 pub async fn post_json_via_curl(
     url: &str,
     headers: &HeaderMap,
     body: &str,
     timeout_secs: u64,
 ) -> Result<(u16, String)> {
-    let mut args = vec![
-        "--silent",
-        "--show-error",
-        "--max-time",
-    ];
+    // Write body to a temp file (avoids stdin pipe buffering issues)
+    let body_file = format!("/tmp/jimeng_curl_{}.json", std::process::id());
+    tokio::fs::write(&body_file, body.as_bytes()).await?;
+
     let timeout_str = timeout_secs.to_string();
-    args.push(&timeout_str);
-    args.extend_from_slice(&[
-        "--connect-timeout", "15",
-        "--request", "POST",
-        "--write-out", "\n__CURL_STATUS__%{http_code}",
-        "--url",
-    ]);
-    args.push(url);
-    args.extend_from_slice(&["--data-binary", "@-"]);
 
     // Build header strings
     let mut header_strings = vec!["Content-Type: application/json".to_string()];
@@ -42,9 +31,15 @@ pub async fn post_json_via_curl(
     }
 
     let mut cmd = Command::new("curl");
-    for arg in &args {
-        cmd.arg(arg);
-    }
+    cmd.arg("--silent")
+        .arg("--show-error")
+        .arg("--max-time").arg(&timeout_str)
+        .arg("--connect-timeout").arg("15")
+        .arg("--request").arg("POST")
+        .arg("--write-out").arg("\n__CURL_STATUS__%{http_code}")
+        .arg("--url").arg(url)
+        .arg("-d").arg(format!("@{body_file}"));
+
     for h in &header_strings {
         cmd.arg("-H").arg(h);
     }
@@ -55,21 +50,17 @@ pub async fn post_json_via_curl(
         .collect();
     tracing::debug!(?header_names, body_len = body.len(), "curl transport request");
 
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+    let output = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to spawn curl: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to spawn curl: {e}"))?
+        .wait_with_output()
+        .await?;
 
-    // Write body to stdin
-    if let Some(ref mut stdin) = child.stdin {
-        stdin.write_all(body.as_bytes()).await?;
-        stdin.shutdown().await?;
-    }
-
-    let output = child.wait_with_output().await?;
+    // Clean up temp file
+    let _ = tokio::fs::remove_file(&body_file).await;
 
     if !output.status.success() && output.stdout.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
