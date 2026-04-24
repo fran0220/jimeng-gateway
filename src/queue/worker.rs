@@ -11,11 +11,11 @@ use crate::jimeng::models::{MaterialType, UploadedMaterial};
 
 /// Background worker: dequeue tasks, submit to jimeng, poll for results.
 pub async fn worker_loop(queue: TaskQueue, state: Arc<AppState>) {
+    // Don't enable auto decompression — it adds Accept-Encoding headers
+    // that conflict with ByteDance's fingerprint validation.
     let client = Client::builder()
         .timeout(Duration::from_secs(120))
-        .gzip(true)
-        .brotli(true)
-        .deflate(true)
+        .no_proxy()
         .build()
         .expect("Failed to build HTTP client");
 
