@@ -49,6 +49,12 @@ pub async fn post_json_via_curl(
         cmd.arg("-H").arg(h);
     }
 
+    // Log header names (not values to avoid leaking cookies)
+    let header_names: Vec<&str> = header_strings.iter()
+        .map(|h| h.split(':').next().unwrap_or("?"))
+        .collect();
+    tracing::debug!(?header_names, body_len = body.len(), "curl transport request");
+
     let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

@@ -143,12 +143,18 @@ pub fn build_headers(session_token: &str, uri: &str) -> HeaderMap {
 }
 
 /// Standard query parameters appended to all jimeng API requests.
-pub fn standard_query_params() -> Vec<(&'static str, String)> {
+/// When `cookie_jar` is provided, extracts `_tea_web_id` from it to ensure
+/// the `webId` query param matches the cookie fingerprint.
+pub fn standard_query_params_with_jar(cookie_jar: Option<&str>) -> Vec<(&'static str, String)> {
+    let web_id = cookie_jar
+        .and_then(|jar| extract_cookie_value(jar, "_tea_web_id"))
+        .unwrap_or_else(|| WEB_ID.to_string());
+
     vec![
         ("aid", DEFAULT_ASSISTANT_ID.to_string()),
         ("device_platform", "web".to_string()),
         ("region", "cn".to_string()),
-        ("webId", WEB_ID.to_string()),
+        ("webId", web_id),
         ("da_version", "3.3.14".to_string()),
         ("os", "mac".to_string()),
         ("web_component_open_flag", "1".to_string()),
@@ -156,6 +162,22 @@ pub fn standard_query_params() -> Vec<(&'static str, String)> {
         ("web_version", "7.5.0".to_string()),
         ("aigc_features", "app_lip_sync".to_string()),
     ]
+}
+
+/// Standard query parameters (legacy, uses random webId).
+pub fn standard_query_params() -> Vec<(&'static str, String)> {
+    standard_query_params_with_jar(None)
+}
+
+/// Extract a cookie value by name from a cookie jar string.
+fn extract_cookie_value(jar: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    for part in jar.split("; ") {
+        if let Some(value) = part.strip_prefix(&prefix) {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 /// Get cookies as (name, value, domain) tuples for browser context injection.

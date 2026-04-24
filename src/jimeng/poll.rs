@@ -36,7 +36,7 @@ pub async fn poll_status(
 ) -> Result<PollResult> {
     let uri = "/mweb/v1/get_history_by_ids";
     let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
-    let params = auth::standard_query_params();
+    let params = auth::standard_query_params_with_jar(cookie_jar);
 
     let body = serde_json::json!({
         "history_ids": [history_record_id],
@@ -200,7 +200,7 @@ pub async fn fetch_hq_video_url(
 ) -> Result<Option<String>> {
     let uri = "/mweb/v1/get_local_item_list";
     let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
-    let params = auth::standard_query_params();
+    let params = auth::standard_query_params_with_jar(cookie_jar);
 
     let body = serde_json::json!({
         "item_id_list": [item_id],

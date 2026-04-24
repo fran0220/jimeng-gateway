@@ -117,7 +117,7 @@ async fn test_session(
         "/mweb/v1/get_history_by_ids",
         session.cookie_jar.as_deref(),
     );
-    let params = crate::jimeng::auth::standard_query_params();
+    let params = crate::jimeng::auth::standard_query_params_with_jar(session.cookie_jar.as_deref());
 
     let resp = client
         .post("https://jimeng.jianying.com/mweb/v1/get_history_by_ids")

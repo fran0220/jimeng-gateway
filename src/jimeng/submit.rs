@@ -195,7 +195,7 @@ pub async fn submit_seedance_video(
     });
 
     // Build the full URL with query params (match browser's params exactly)
-    let std_params = auth::standard_query_params();
+    let std_params = auth::standard_query_params_with_jar(cookie_jar);
     let query_string = std_params.iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
@@ -493,7 +493,7 @@ pub async fn submit_image_generation(
 
     let uri = "/mweb/v1/aigc_draft/generate";
     let headers = auth::build_headers_with_cookies(session_token, uri, cookie_jar);
-    let params = auth::standard_query_params();
+    let params = auth::standard_query_params_with_jar(cookie_jar);
 
     let (status_code, text) = if cookie_jar.is_some() {
         // Use curl transport to avoid TLS fingerprint rejection
